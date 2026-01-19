@@ -1,0 +1,26 @@
+{
+  "name": "fn",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./index.ts",
+    "./convex/_generated/api": "./convex/_generated/api.js",
+    "./convex/_generated/dataModel": "./convex/_generated/dataModel.d.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.11",
+    "@auth/core": "0.37.0",
+    "@convex-dev/agent": "^0.3.2",
+    "@convex-dev/auth": "^0.0.90",
+    "ai": "^6.0.37",
+    "convex": "^1.31.5",
+    "zod": "^4.3.5"
+  }
+}
