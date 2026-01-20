@@ -7,6 +7,7 @@ import React, {
 } from "react";
 import { StyleSheet, View } from "react-native";
 import { Drawer as ExpoDrawer } from "expo-router/drawer";
+import { useLocalSearchParams } from "expo-router";
 import { Drawer } from "react-native-drawer-layout";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -126,6 +127,8 @@ function LeftDrawerNavigator() {
 export default function ChatLayout() {
   const [rightDrawerOpen, setRightDrawerOpen] = useState(false);
   const [leftDrawerOpen, setLeftDrawerOpen] = useState(false);
+  const params = useLocalSearchParams();
+  const flowNanoId = (params.flowId as string) || undefined;
 
   const drawerValue = useMemo(
     () => ({
@@ -154,7 +157,7 @@ export default function ChatLayout() {
             swipeMinDistance={5}
             renderDrawerContent={() => (
               <WidgetDrawer
-                threadId={undefined}
+                flowNanoId={flowNanoId}
                 onClose={() => setRightDrawerOpen(false)}
               />
             )}

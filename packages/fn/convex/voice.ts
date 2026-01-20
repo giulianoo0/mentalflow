@@ -6,7 +6,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 
 export const saveTranscription = mutation({
     args: {
-        threadId: v.id("chatThreads"),
+        flowId: v.id("flows"),
         role: v.union(v.literal("user"), v.literal("assistant")),
         text: v.string(),
         audioEventId: v.optional(v.string()),
@@ -15,22 +15,22 @@ export const saveTranscription = mutation({
         const userId = await getAuthUserId(ctx);
         if (!userId) throw new Error("Not authenticated");
 
-        // Verify thread ownership
-        const thread = await ctx.db.get(args.threadId);
-        if (!thread || thread.userId !== userId) {
-            throw new Error("Thread not found");
+        // Verify flow ownership
+        const flow = await ctx.db.get(args.flowId);
+        if (!flow || flow.userId !== userId) {
+            throw new Error("Flow not found");
         }
 
         const transcriptionId = await ctx.db.insert("voiceTranscriptions", {
-            threadId: args.threadId,
+            flowId: args.flowId,
             role: args.role,
             text: args.text,
             audioEventId: args.audioEventId,
             createdAt: Date.now(),
         });
 
-        // Update thread timestamp
-        await ctx.db.patch(args.threadId, {
+        // Update flow timestamp
+        await ctx.db.patch(args.flowId, {
             updatedAt: Date.now(),
         });
 
@@ -42,21 +42,21 @@ export const saveTranscription = mutation({
 
 export const getTranscriptions = query({
     args: {
-        threadId: v.id("chatThreads"),
+        flowId: v.id("flows"),
     },
     handler: async (ctx, args) => {
         const userId = await getAuthUserId(ctx);
         if (!userId) return [];
 
-        // Verify thread ownership
-        const thread = await ctx.db.get(args.threadId);
-        if (!thread || thread.userId !== userId) {
+        // Verify flow ownership
+        const flow = await ctx.db.get(args.flowId);
+        if (!flow || flow.userId !== userId) {
             return [];
         }
 
         const transcriptions = await ctx.db
             .query("voiceTranscriptions")
-            .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+            .withIndex("by_flow", (q) => q.eq("flowId", args.flowId))
             .order("asc")
             .collect();
 
@@ -66,21 +66,21 @@ export const getTranscriptions = query({
 
 export const getLatestTranscriptions = query({
     args: {
-        threadId: v.id("chatThreads"),
+        flowId: v.id("flows"),
         limit: v.optional(v.number()),
     },
     handler: async (ctx, args) => {
         const userId = await getAuthUserId(ctx);
         if (!userId) return [];
 
-        const thread = await ctx.db.get(args.threadId);
-        if (!thread || thread.userId !== userId) {
+        const flow = await ctx.db.get(args.flowId);
+        if (!flow || flow.userId !== userId) {
             return [];
         }
 
         const transcriptions = await ctx.db
             .query("voiceTranscriptions")
-            .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+            .withIndex("by_flow", (q) => q.eq("flowId", args.flowId))
             .order("desc")
             .take(args.limit || 10);
 

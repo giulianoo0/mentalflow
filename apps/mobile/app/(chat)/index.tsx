@@ -5,6 +5,7 @@ import {
   FlatList,
   StyleSheet,
   Platform,
+  Text,
   TouchableOpacity,
   useWindowDimensions,
   Keyboard,
@@ -12,7 +13,6 @@ import {
 } from "react-native";
 
 import MaskedView from "@react-native-masked-view/masked-view";
-import { fetch as expoFetch } from "expo/fetch";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
@@ -26,15 +26,14 @@ import Animated, {
   Easing,
 } from "react-native-reanimated";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
-import { useQuery, useMutation } from "convex/react";
-import { useAuthToken } from "@convex-dev/auth/react";
+import { useQuery, useMutation, useAction } from "convex/react";
+import { nanoid } from "nanoid/non-secure";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { api } from "../../../../packages/fn/convex/_generated/api";
 
 import { ChatHeader } from "@/components/chat/chat-header";
 import { ChatInputBar } from "@/components/chat/chat-input-bar";
 import { StreamdownRN } from "streamdown-rn";
-import { Text } from "react-native";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useVoiceSession } from "@/hooks/useVoiceSession";
 
@@ -188,56 +187,89 @@ export default function ChatScreen() {
   const { height: screenHeight } = useWindowDimensions();
   const router = useRouter();
   const params = useLocalSearchParams();
-  const token = useAuthToken();
+  const [pendingAssistant, setPendingAssistant] = React.useState<{
+    requestId: string;
+    createdAt: number;
+  } | null>(null);
+  const [isSending, setIsSending] = React.useState(false);
   // Track component heights for precise spacing calculations
   const [lastUserMessageHeight, setLastUserMessageHeight] = useState(0);
   const [chatHeaderHeight, setChatHeaderHeight] = useState(90);
   const [inputBarHeight, setInputBarHeight] = useState(80);
 
-  // Get threadId from params
-  const paramThreadId = (params.threadId as string) || undefined;
-  const [activeThreadId, setActiveThreadId] = useState<string | undefined>(
+  // Get flow id from params
+  const paramFlowId = (params.flowId as string) || undefined;
+  const [activeFlowId, setActiveFlowId] = useState<string | undefined>(
     undefined,
   );
-  const threadId = activeThreadId || paramThreadId;
-  const [isCreatingThread, setIsCreatingThread] = useState(false);
+  const flowNanoId = activeFlowId || paramFlowId;
+  const [isCreatingFlow, setIsCreatingFlow] = useState(false);
 
   // Track param changes to reset local override (activeThreadId) when user navigates
-  const prevParamThreadIdRef = useRef(paramThreadId);
+  const prevParamFlowIdRef = useRef(paramFlowId);
   useEffect(() => {
-    if (prevParamThreadIdRef.current !== paramThreadId) {
-      setActiveThreadId(undefined);
+    if (prevParamFlowIdRef.current !== paramFlowId) {
+      setActiveFlowId(undefined);
     }
-    prevParamThreadIdRef.current = paramThreadId;
-  }, [paramThreadId]);
+    prevParamFlowIdRef.current = paramFlowId;
+  }, [paramFlowId]);
+
+  const prevFlowRef = useRef<string | undefined>(flowNanoId);
+  useEffect(() => {
+    if (prevFlowRef.current !== flowNanoId) {
+      setPendingAssistant(null);
+      setIsSending(false);
+      setLastUserMessageHeight(0);
+      flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
+      prevFlowRef.current = flowNanoId;
+    }
+  }, [flowNanoId]);
 
   // Load messages from Convex
   const convexMessages = useQuery(
-    (api as any).chat.getMessages,
-    threadId ? { threadId: threadId as any } : "skip",
+    (api as any).messages.listByFlow,
+    flowNanoId ? { flowNanoId } : "skip",
   );
-
-  const getApiUrl = () => {
-    return process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000";
-  };
-
-  const [pendingMessage, setPendingMessage] = React.useState<string | null>(
-    null,
-  );
-  const [optimisticTimestamp, setOptimisticTimestamp] = React.useState<
-    number | null
-  >(null);
 
   // Voice session state
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [voiceElapsedTime, setVoiceElapsedTime] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const createThread = useMutation((api as any).chat.createThread);
+  const createFlow = useMutation((api as any).flows.createFlow);
+  const insertMessage = useMutation(
+    (api as any).messages.insert,
+  ).withOptimisticUpdate((localStore: any, args: any) => {
+    if (!args.flowNanoId) return;
+    const existing = localStore.getQuery((api as any).messages.listByFlow, {
+      flowNanoId: args.flowNanoId,
+    });
+    if (!existing) return;
+
+    localStore.setQuery(
+      (api as any).messages.listByFlow,
+      { flowNanoId: args.flowNanoId },
+      [
+        ...existing,
+        {
+          _id: `optimistic-${args.nanoId || Date.now()}`,
+          _creationTime: Date.now(),
+          flowId: "optimistic",
+          nanoId: args.nanoId,
+          role: args.role,
+          content: args.content,
+          createdAt: args.createdAt ?? Date.now(),
+          isComplete: args.isComplete ?? true,
+          dedupeKey: args.dedupeKey,
+        },
+      ],
+    );
+  });
+  const sendMessageWorkflow = useAction((api as any).chat.sendMessageWorkflow);
 
   // Voice session hook
   const voiceSession = useVoiceSession({
-    threadId,
+    flowNanoId,
     onStatusChange: (status) => {
       if (status === "connected" || status === "listening") {
         if (!timerRef.current) {
@@ -267,25 +299,23 @@ export default function ChatScreen() {
     Keyboard.dismiss();
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    if (!threadId) {
-      setIsCreatingThread(true);
+    if (!flowNanoId) {
+      setIsCreatingFlow(true);
       try {
-        const newThreadId = await createThread({
-          title: "Nova conversa de voz",
-        });
-        setActiveThreadId(newThreadId);
-        router.setParams({ threadId: newThreadId });
+        const newFlow = await createFlow({ title: "Nova conversa de voz" });
+        setActiveFlowId(newFlow.flowNanoId);
+        router.setParams({ flowId: newFlow.flowNanoId });
       } catch (error) {
         console.error("Failed to create thread:", error);
         setIsVoiceActive(false);
         return;
       } finally {
-        setIsCreatingThread(false);
+        setIsCreatingFlow(false);
       }
     }
 
     await voiceSession.startSession();
-  }, [voiceSession, threadId, createThread]);
+  }, [voiceSession, flowNanoId, createFlow]);
 
   const handleVoiceClose = useCallback(() => {
     setIsVoiceActive(false);
@@ -320,80 +350,71 @@ export default function ChatScreen() {
 
   // Format messages for display
   const messages = React.useMemo(() => {
-    const msgs = (convexMessages || []).map((msg: any) => ({
+    const mapped = (convexMessages || []).map((msg: any) => ({
       id: msg._id,
       role: msg.role as "user" | "assistant",
       content:
         msg.chunks && msg.chunks.length > 0
           ? msg.chunks.map((c: any) => c.content).join("")
           : msg.content,
-      isComplete: msg.isComplete,
-      createdAt: new Date(msg._creationTime),
+      isComplete: msg.isComplete ?? !(msg.chunks && msg.chunks.length > 0),
+      createdAt: new Date(msg.createdAt ?? msg._creationTime),
     }));
 
-    if (pendingMessage) {
-      const alreadyExists = msgs.some(
-        (msg: any) =>
-          msg.role === "user" && msg.content.trim() === pendingMessage.trim(),
+    if (pendingAssistant) {
+      const hasAssistant = mapped.some(
+        (msg: { role: "user" | "assistant"; createdAt: Date }) =>
+          msg.role === "assistant" &&
+          msg.createdAt.getTime() >= pendingAssistant.createdAt,
       );
-
-      if (!alreadyExists) {
-        msgs.push({
-          id: `optimistic-${optimisticTimestamp || Date.now()}`,
-          role: "user",
-          content: pendingMessage,
-          isComplete: true,
-          createdAt: new Date(),
+      if (!hasAssistant) {
+        mapped.push({
+          id: `pending-${pendingAssistant.requestId}`,
+          role: "assistant",
+          content: "",
+          isComplete: false,
+          createdAt: new Date(pendingAssistant.createdAt),
         });
-      } else {
-        setPendingMessage(null);
-        setOptimisticTimestamp(null);
       }
     }
 
-    if (msgs.length === 0) return [];
-    return msgs;
-  }, [convexMessages, pendingMessage, optimisticTimestamp]);
+    return mapped;
+  }, [convexMessages, pendingAssistant]);
 
-  // Clear pending message once it appears in the real list
   React.useEffect(() => {
-    if (!pendingMessage || !convexMessages || convexMessages.length === 0)
-      return;
-
-    const recentMessages = convexMessages.slice(-3);
-    const foundMatch = recentMessages.some((msg: any) => {
-      if (msg.role !== "user") return false;
-
-      const content =
-        msg.chunks && msg.chunks.length > 0
-          ? msg.chunks.map((c: any) => c.content).join("")
-          : msg.content;
-
-      return content.trim() === pendingMessage.trim();
-    });
-
-    if (foundMatch) {
-      setPendingMessage(null);
-      setOptimisticTimestamp(null);
+    if (!pendingAssistant) return;
+    const hasAssistant = (convexMessages || []).some(
+      (msg: any) =>
+        msg.role === "assistant" &&
+        new Date(msg.createdAt ?? msg._creationTime).getTime() >=
+          pendingAssistant.createdAt,
+    );
+    if (hasAssistant) {
+      setPendingAssistant(null);
     }
-  }, [convexMessages, pendingMessage]);
+  }, [convexMessages, pendingAssistant]);
 
-  const [isSending, setIsSending] = React.useState(false);
-  const prevThreadIdRef = useRef<string | undefined>(threadId);
+  React.useEffect(() => {
+    if (!pendingAssistant && isSending) {
+      setIsSending(false);
+    }
+  }, [pendingAssistant, isSending]);
+
+  const prevFlowIdRef = useRef<string | undefined>(flowNanoId);
   const flatListRef = useRef<FlatList>(null);
 
   const [isSwitchingThreads, setIsSwitchingThreads] = React.useState(false);
 
   useEffect(() => {
     if (
-      prevThreadIdRef.current &&
-      threadId &&
-      prevThreadIdRef.current !== threadId
+      prevFlowIdRef.current &&
+      flowNanoId &&
+      prevFlowIdRef.current !== flowNanoId
     ) {
       setIsSwitchingThreads(true);
     }
-    prevThreadIdRef.current = threadId;
-  }, [threadId]);
+    prevFlowIdRef.current = flowNanoId;
+  }, [flowNanoId]);
 
   useEffect(() => {
     if (isSwitchingThreads && convexMessages !== undefined) {
@@ -402,15 +423,13 @@ export default function ChatScreen() {
   }, [convexMessages, isSwitchingThreads]);
 
   useEffect(() => {
-    if (!threadId && prevThreadIdRef.current) {
+    if (!flowNanoId && prevFlowIdRef.current) {
       setInputText("");
-      setPendingMessage(null);
-      setOptimisticTimestamp(null);
       setIsSending(false);
       voiceSession.resetSession();
-      setActiveThreadId(undefined);
+      setActiveFlowId(undefined);
     }
-  }, [threadId]);
+  }, [flowNanoId]);
 
   const isStreaming = React.useMemo(() => {
     if (messages.length === 0) return false;
@@ -423,7 +442,13 @@ export default function ChatScreen() {
     return false;
   }, [messages]);
 
-  const status = isSending ? "submitted" : isStreaming ? "streaming" : "ready";
+  const isSendLocked = isSending || isStreaming;
+
+  const status = pendingAssistant
+    ? "submitted"
+    : isStreaming
+      ? "streaming"
+      : "ready";
 
   const lastUserMessageIndex = React.useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -435,14 +460,22 @@ export default function ChatScreen() {
   }, [messages]);
 
   useEffect(() => {
-    if (messages.length > 0 && lastUserMessageIndex >= 0) {
-      setTimeout(() => {
-        flatListRef.current?.scrollToIndex({
-          index: lastUserMessageIndex,
-          animated: true,
-          viewPosition: 0,
-        });
-      }, 300);
+    if (messages.length > 0) {
+      const lastIndex = messages.length - 1;
+      const targetIndex =
+        status === "submitted" || messages[lastIndex]?.role === "assistant"
+          ? lastIndex
+          : lastUserMessageIndex;
+
+      if (targetIndex >= 0) {
+        setTimeout(() => {
+          flatListRef.current?.scrollToIndex({
+            index: targetIndex,
+            animated: true,
+            viewPosition: 0,
+          });
+        }, 50);
+      }
     }
   }, [messages.length, lastUserMessageIndex, status]);
 
@@ -478,39 +511,53 @@ export default function ChatScreen() {
 
   const handleSend = async () => {
     const trimmedInput = inputText.trim();
-    if (!trimmedInput || isSending) return;
+    if (!trimmedInput || isSendLocked) return;
 
     const message = trimmedInput;
     setInputText("");
-    setPendingMessage(message);
     setIsSending(true);
 
     try {
-      const response = await expoFetch(`${getApiUrl()}/chat`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          threadId,
-          message,
-        }),
+      let activeFlowNanoId = flowNanoId;
+      if (!activeFlowNanoId) {
+        setIsCreatingFlow(true);
+        try {
+          const newFlow = await createFlow({});
+          activeFlowNanoId = newFlow.flowNanoId;
+          setActiveFlowId(activeFlowNanoId);
+          router.setParams({ flowId: activeFlowNanoId });
+        } finally {
+          setIsCreatingFlow(false);
+        }
+      }
+
+      const requestId = nanoid();
+      const userMessageNanoId = nanoid();
+      const createdAt = Date.now();
+
+      await insertMessage({
+        flowNanoId: activeFlowNanoId,
+        nanoId: userMessageNanoId,
+        role: "user",
+        content: message,
+        dedupeKey: `req:${requestId}:user`,
+        isComplete: true,
+        createdAt,
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.threadId && !threadId) {
-          router.setParams({ threadId: data.threadId });
-        }
-      } else {
-        console.error("Failed to send message", response.status);
-        setInputText(message);
-      }
+      setPendingAssistant({ requestId, createdAt });
+
+      await sendMessageWorkflow({
+        flowNanoId: activeFlowNanoId,
+        content: message,
+        requestId,
+        userMessageNanoId,
+        clientCreatedAt: createdAt,
+      });
     } catch (error) {
       console.error("Error sending message:", error);
       setInputText(message);
-    } finally {
+      setPendingAssistant(null);
       setIsSending(false);
     }
   };
@@ -524,25 +571,32 @@ export default function ChatScreen() {
     const isLastAssistantMessage = isLastMessage && !isUser;
     const isMsgStreaming = !item.isComplete && !isUser;
 
-    const topPadding = 72;
-    const userMessageBottomMargin = 12;
+    const topSpacing = 24;
     const assistantContentPadding = 24;
+    const prevMessage = messages[index - 1];
+    const isAfterAssistant = isUser && prevMessage?.role === "assistant";
+    const userTopSpacing = isLastUserMessage
+      ? 24
+      : isAfterAssistant
+        ? 16
+        : 0;
 
-    const dynamicHeight =
+    const hasMultipleTurns = messages.length > 2;
+    const minAssistantHeight =
       isLastAssistantMessage &&
+      hasMultipleTurns &&
       lastUserMessageHeight > 0 &&
       chatHeaderHeight > 0 &&
       inputBarHeight > 0
         ? Math.max(
-            100,
+            0,
             screenHeight -
               chatHeaderHeight -
               inputBarHeight -
-              topPadding -
+              topSpacing -
               lastUserMessageHeight -
-              userMessageBottomMargin -
               assistantContentPadding,
-          )
+          ) + 80
         : undefined;
 
     return (
@@ -550,7 +604,10 @@ export default function ChatScreen() {
         style={[
           styles.messageContainer,
           isUser ? styles.userMessage : styles.assistantMessage,
-          isLastUserMessage ? { marginTop: 24 } : {},
+          userTopSpacing ? { marginTop: userTopSpacing } : {},
+          !isUser && minAssistantHeight
+            ? { minHeight: minAssistantHeight }
+            : {},
         ]}
         onLayout={(event) => {
           if (isLastUserMessage) {
@@ -563,20 +620,25 @@ export default function ChatScreen() {
           <Text style={[styles.userText]}>{text}</Text>
         ) : (
           <>
-            <StreamdownRN isComplete={!isMsgStreaming} theme="light">
-              {text}
-            </StreamdownRN>
-            {!isMsgStreaming && text.length > 0 && (
-              <MessageActions
-                text={text}
-                onReload={reload}
-                isLast={isLastMessage}
-                timestamp={item.createdAt || new Date()}
-              />
-            )}
-            {isLastAssistantMessage && dynamicHeight && dynamicHeight > 0 && (
-              <View style={{ height: dynamicHeight }} />
-            )}
+            <View style={styles.assistantBody}>
+              {text.length === 0 && isMsgStreaming ? (
+                <View style={{ paddingTop: 8 }}>
+                  <BlinkingCircle />
+                </View>
+              ) : (
+                <StreamdownRN isComplete={!isMsgStreaming} theme="light">
+                  {text}
+                </StreamdownRN>
+              )}
+              {!isMsgStreaming && text.length > 0 && (
+                <MessageActions
+                  text={text}
+                  onReload={reload}
+                  isLast={isLastMessage}
+                  timestamp={item.createdAt || new Date()}
+                />
+              )}
+            </View>
           </>
         )}
       </View>
@@ -600,6 +662,7 @@ export default function ChatScreen() {
       <View style={styles.content}>
         <Animated.View style={[styles.listWrapper, listContainerStyle]}>
           <FlatList
+            key={flowNanoId || "new-chat"}
             ref={flatListRef}
             data={isLoading ? [1, 2, 3] : messages}
             renderItem={
@@ -622,22 +685,13 @@ export default function ChatScreen() {
             keyExtractor={(item, index) =>
               isLoading ? `skeleton-${index}` : item.id || index.toString()
             }
-            ListEmptyComponent={!isLoading ? ShimmeringText : null}
+            ListEmptyComponent={!isLoading ? <ShimmeringText /> : null}
             contentContainerStyle={[
               styles.messageList,
               !isLoading && messages.length === 0 && { flex: 1 },
             ]}
             inverted={false}
             showsVerticalScrollIndicator={false}
-            ListFooterComponent={() => (
-              <View style={{ paddingBottom: 20 }}>
-                {status === "submitted" && !isStreaming && (
-                  <View style={[styles.assistantMessage, { marginTop: 12 }]}>
-                    <BlinkingCircle />
-                  </View>
-                )}
-              </View>
-            )}
             onScrollToIndexFailed={(info) => {
               flatListRef.current?.scrollToOffset({
                 offset: info.averageItemLength * info.index,
@@ -711,6 +765,12 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
     width: "100%",
     marginBottom: 24,
+    justifyContent: "flex-start",
+  },
+  assistantBody: {
+    flexGrow: 0,
+    flexShrink: 0,
+    alignItems: "flex-start",
   },
   userText: {
     fontSize: 16,

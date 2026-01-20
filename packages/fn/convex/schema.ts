@@ -5,45 +5,87 @@ import { authTables } from "@convex-dev/auth/server";
 const schema = defineSchema({
     ...authTables,
 
-    // Chat threads table
-    chatThreads: defineTable({
+    flows: defineTable({
         userId: v.id("users"),
-        title: v.string(),
+        nanoId: v.string(),
+        title: v.optional(v.string()),
+        summary: v.optional(v.string()),
+        mood: v.optional(v.string()),
         createdAt: v.number(),
         updatedAt: v.number(),
-        isActive: v.boolean(),
-        isGenerating: v.optional(v.boolean()),
     })
         .index("by_user", ["userId", "updatedAt"])
-        .index("by_user_active", ["userId", "isActive", "updatedAt"]),
+        .index("by_nanoId", ["nanoId"]),
 
-    // Chat messages table
-    chatMessages: defineTable({
-        threadId: v.id("chatThreads"),
+    messages: defineTable({
+        flowId: v.id("flows"),
+        nanoId: v.string(),
         role: v.union(v.literal("user"), v.literal("assistant")),
         content: v.string(),
+        createdAt: v.number(),
+        dedupeKey: v.optional(v.string()),
         isComplete: v.optional(v.boolean()),
-        isStreaming: v.optional(v.boolean()), // Deprecated, keeping for legacy
+    })
+        .index("by_flow_createdAt", ["flowId", "createdAt"])
+        .index("by_flow_nanoId", ["flowId", "nanoId"])
+        .index("by_flow_dedupeKey", ["flowId", "dedupeKey"]),
+
+    messageChunks: defineTable({
+        messageId: v.id("messages"),
+        content: v.string(),
+        createdAt: v.optional(v.number()),
+    })
+        .index("by_message", ["messageId", "createdAt"]),
+
+    widgets: defineTable({
+        flowId: v.id("flows"),
+        nanoId: v.string(),
+        type: v.union(
+            v.literal("task"),
+            v.literal("person"),
+            v.literal("event"),
+            v.literal("note")
+        ),
+        title: v.string(),
+        description: v.optional(v.string()),
+        data: v.any(),
+        fingerprint: v.string(),
+        titleNormalized: v.string(),
+        sourceMessageNanoIds: v.array(v.string()),
+        createdAt: v.number(),
+        updatedAt: v.number(),
+    })
+        .index("by_flow", ["flowId", "updatedAt"])
+        .index("by_flow_fingerprint", ["flowId", "fingerprint"])
+        .index("by_flow_titleNormalized", ["flowId", "titleNormalized"])
+        .index("by_nanoId", ["nanoId"])
+        .index("by_type", ["type"]),
+
+    widgetLinks: defineTable({
+        flowId: v.id("flows"),
+        fromWidgetId: v.id("widgets"),
+        toWidgetId: v.id("widgets"),
+        kind: v.union(
+            v.literal("mentions"),
+            v.literal("related"),
+            v.literal("depends_on")
+        ),
+        fingerprint: v.string(),
         createdAt: v.number(),
     })
-        .index("by_thread", ["threadId", "createdAt"]),
+        .index("by_flow", ["flowId", "createdAt"])
+        .index("by_flow_fingerprint", ["flowId", "fingerprint"])
+        .index("by_flow_from", ["flowId", "fromWidgetId"])
+        .index("by_flow_to", ["flowId", "toWidgetId"]),
 
-    // Message chunks for streaming - stored incrementally
-    messageChunks: defineTable({
-        messageId: v.id("chatMessages"),
-        content: v.string(),
-    })
-        .index("by_messageId", ["messageId"]),
-
-    // Voice transcriptions from OpenAI Realtime API
     voiceTranscriptions: defineTable({
-        threadId: v.id("chatThreads"),
+        flowId: v.id("flows"),
         role: v.union(v.literal("user"), v.literal("assistant")),
         text: v.string(),
-        audioEventId: v.optional(v.string()), // OpenAI event ID for tracking
+        audioEventId: v.optional(v.string()),
         createdAt: v.number(),
     })
-        .index("by_thread", ["threadId", "createdAt"]),
+        .index("by_flow", ["flowId", "createdAt"]),
 });
 
 export default schema;

@@ -26,17 +26,17 @@ export function ChatDrawerContent(props: DrawerContentComponentProps) {
   const insets = useSafeAreaInsets();
   const [searchText, setSearchText] = useState("");
 
-  const threadsRaw = useQuery((api as any).chat.listThreads);
-  const threads = threadsRaw || [];
-  const isLoading = threadsRaw === undefined;
+  const flowsRaw = useQuery((api as any).flows.listByUser);
+  const flows = flowsRaw || [];
+  const isLoading = flowsRaw === undefined;
 
-  const handleThreadPress = (threadId: string) => {
-    router.push({ pathname: "/(chat)", params: { threadId } });
+  const handleFlowPress = (flowNanoId: string) => {
+    router.push({ pathname: "/(chat)", params: { flowId: flowNanoId } });
     props.navigation.closeDrawer();
   };
 
   const handleNewChat = () => {
-    router.push({ pathname: "/(chat)", params: { threadId: undefined } });
+    router.push("/(chat)");
     props.navigation.closeDrawer();
   };
 
@@ -57,22 +57,22 @@ export function ChatDrawerContent(props: DrawerContentComponentProps) {
     return 180 + (Math.abs(hash) % 81);
   };
 
-  const leftThreads = threads.filter((_: any, i: number) => i % 2 === 0);
-  const rightThreads = threads.filter((_: any, i: number) => i % 2 !== 0);
+  const leftFlows = flows.filter((_: any, i: number) => i % 2 === 0);
+  const rightFlows = flows.filter((_: any, i: number) => i % 2 !== 0);
 
   const renderCard = (item: any, _index: number, _isRightColumn: boolean) => (
     <Pressable
-      key={item._id}
+      key={item.nanoId}
       style={({ pressed }) => [
         styles.card,
-        { minHeight: getStableRandomHeight(item._id) },
+        { minHeight: getStableRandomHeight(item.nanoId) },
         pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
       ]}
-      onPress={() => handleThreadPress(item._id)}
+      onPress={() => handleFlowPress(item.nanoId)}
     >
       <View>
         <Text style={styles.cardTitle} numberOfLines={2}>
-          {item.title || "Nova Conversa"}
+            {item.title || "Nova Conversa"}
         </Text>
         <Text style={styles.cardPreview} numberOfLines={3}>
           Procurando emails dos remanecentes hisotircos da taxa absia para ter
@@ -82,7 +82,7 @@ export function ChatDrawerContent(props: DrawerContentComponentProps) {
 
       <View style={styles.cardFooter}>
         <Text style={styles.cardTimestamp}>
-          {formatTimestamp(item._creationTime)}
+          {formatTimestamp(item.updatedAt || item._creationTime)}
         </Text>
       </View>
     </Pressable>
@@ -103,14 +103,14 @@ export function ChatDrawerContent(props: DrawerContentComponentProps) {
       >
         <View style={styles.masonryContainer}>
           <View style={styles.column}>
-            {leftThreads.map((t: any, i: number) => renderCard(t, i, false))}
+            {leftFlows.map((t: any, i: number) => renderCard(t, i, false))}
           </View>
           <View style={styles.column}>
-            {rightThreads.map((t: any, i: number) => renderCard(t, i, true))}
+            {rightFlows.map((t: any, i: number) => renderCard(t, i, true))}
           </View>
         </View>
 
-        {threads.length === 0 && !isLoading && (
+        {flows.length === 0 && !isLoading && (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>Sem conversas ainda</Text>
           </View>

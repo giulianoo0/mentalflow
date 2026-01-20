@@ -9,7 +9,8 @@
     "./convex/_generated/dataModel": "./convex/_generated/dataModel.d.ts"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/node": "^25.0.9"
   },
   "peerDependencies": {
     "typescript": "^5"
@@ -21,6 +22,7 @@
     "@convex-dev/auth": "^0.0.90",
     "ai": "^6.0.37",
     "convex": "^1.31.5",
+    "nanoid": "^5.1.6",
     "zod": "^4.3.5"
   }
 }

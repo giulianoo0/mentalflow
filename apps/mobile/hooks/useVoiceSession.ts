@@ -17,7 +17,6 @@ import {
 import { useMutation } from 'convex/react';
 import { useAuthToken } from "@convex-dev/auth/react";
 import { api } from '../../../packages/fn/convex/_generated/api';
-import type { Id } from '../../../packages/fn/convex/_generated/dataModel';
 
 export type VoiceSessionStatus =
     | 'idle'
@@ -36,14 +35,14 @@ interface Transcription {
 }
 
 interface UseVoiceSessionOptions {
-    threadId?: string;
+    flowNanoId?: string;
     onTranscription?: (transcription: Transcription) => void;
     onStatusChange?: (status: VoiceSessionStatus) => void;
     onError?: (error: Error) => void;
 }
 
 export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
-    const { threadId, onTranscription, onStatusChange, onError } = options;
+    const { flowNanoId, onTranscription, onStatusChange, onError } = options;
 
     const [status, setStatus] = useState<VoiceSessionStatus>('idle');
     const [isSpeaking, setIsSpeaking] = useState(false);
@@ -74,9 +73,9 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     }, [recorderState.metering, recorderState.isRecording, status, isSpeaking]);
 
     const token = useAuthToken();
-    const createVoiceMessage = useMutation((api as any).chat.createVoiceMessage);
-    const createPendingVoiceMessage = useMutation((api as any).chat.createPendingVoiceMessage);
-    const updateVoiceMessageContent = useMutation((api as any).chat.updateVoiceMessageContent);
+    const insertMessage = useMutation((api as any).messages.insert);
+    const createPendingMessage = useMutation((api as any).messages.createPending);
+    const updateMessageContent = useMutation((api as any).messages.updateContent);
 
     const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
     const dataChannelRef = useRef<any>(null);
@@ -84,12 +83,12 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     const isConnectingRef = useRef(false);
     const isAbortedRef = useRef(false);
     const onOpenTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const threadIdRef = useRef(threadId);
+    const flowNanoIdRef = useRef(flowNanoId);
     const pendingUserMessageIdRef = useRef<string | null>(null);
 
     useEffect(() => {
-        threadIdRef.current = threadId;
-    }, [threadId]);
+        flowNanoIdRef.current = flowNanoId;
+    }, [flowNanoId]);
 
     const updateStatus = useCallback((newStatus: VoiceSessionStatus) => {
         setStatus(newStatus);
@@ -149,14 +148,14 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                     setTranscriptions(prev => [...prev, t]);
                     onTranscription?.(t);
 
-                    if (threadIdRef.current) {
+                    if (flowNanoIdRef.current) {
                         if (pendingUserMessageIdRef.current) {
                             // Update the pending placeholder we created earlier
-                            updateVoiceMessageContent({ messageId: pendingUserMessageIdRef.current as any, content: userText }).catch(console.error);
+                            updateMessageContent({ messageId: pendingUserMessageIdRef.current as any, content: userText, isComplete: true }).catch(console.error);
                             pendingUserMessageIdRef.current = null;
                         } else {
                             // Fallback if no placeholder exists (e.g. very short utterance?)
-                            createVoiceMessage({ threadId: threadIdRef.current as any, role: 'user', content: userText }).catch(console.error);
+                            insertMessage({ flowNanoId: flowNanoIdRef.current as any, role: 'user', content: userText, isComplete: true }).catch(console.error);
                         }
                     }
                 }
@@ -171,8 +170,8 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                     setTranscriptions(prev => [...prev, t]);
                     onTranscription?.(t);
                     setCurrentTranscript('');
-                    if (threadIdRef.current) {
-                        createVoiceMessage({ threadId: threadIdRef.current as any, role: 'assistant', content: assistantText }).catch(console.error);
+                    if (flowNanoIdRef.current) {
+                        insertMessage({ flowNanoId: flowNanoIdRef.current as any, role: 'assistant', content: assistantText, isComplete: true }).catch(console.error);
                     }
                 }
                 break;
@@ -183,8 +182,8 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
             case 'input_audio_buffer.speech_stopped':
                 setIsSpeaking(false);
                 // Create pending message to reserve order in the timeline
-                if (threadIdRef.current) {
-                    createPendingVoiceMessage({ threadId: threadIdRef.current as any, role: 'user' })
+                if (flowNanoIdRef.current) {
+                    createPendingMessage({ flowNanoId: flowNanoIdRef.current as any, role: 'user' })
                         .then(id => {
                             pendingUserMessageIdRef.current = id;
                         })
@@ -210,7 +209,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                 onError?.(new Error(event.error?.message || 'Realtime API error'));
                 break;
         }
-    }, [currentTranscript, createVoiceMessage, createPendingVoiceMessage, updateVoiceMessageContent, onTranscription, updateStatus, onError]);
+    }, [currentTranscript, insertMessage, createPendingMessage, updateMessageContent, onTranscription, updateStatus, onError]);
 
     const startSession = useCallback(async () => {
         if (isConnectingRef.current || (status !== 'idle' && status !== 'disconnected' && status !== 'error')) return;
@@ -258,7 +257,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
             const track = stream.getAudioTracks()[0];
             if (track) pc.addTrack(track, stream);
 
-            const dc = pc.createDataChannel('oai-events');
+            const dc = pc.createDataChannel('oai-events') as any;
             dataChannelRef.current = dc;
 
             dc.onopen = () => {

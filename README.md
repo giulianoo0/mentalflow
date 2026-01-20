@@ -1,3 +1,26 @@
+# Mentalflow
+
+## Local Development (Bun)
+
+```sh
+bun install
+```
+
+```sh
+bunx convex dev
+```
+
+```sh
+bunx convex codegen
+```
+
+Required env vars:
+
+- `OPENAI_API_KEY`
+- `CONVEX_URL`
+- `EXPO_PUBLIC_CONVEX_URL`
+- `EXPO_PUBLIC_API_URL` (for the realtime token proxy)
+
 # Turborepo starter
 
 This Turborepo starter is maintained by the Turborepo core team.
