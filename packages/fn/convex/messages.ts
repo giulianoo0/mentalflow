@@ -78,6 +78,19 @@ export const updateContent = mutation({
     messageId: v.id("messages"),
     content: v.string(),
     isComplete: v.optional(v.boolean()),
+    toolCalls: v.optional(
+      v.array(
+        v.object({
+          name: v.string(),
+          args: v.any(),
+          result: v.any(),
+          createdAt: v.number(),
+        })
+      )
+    ),
+    reasoningSummary: v.optional(v.string()),
+    thinkingMs: v.optional(v.number()),
+    model: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -92,6 +105,12 @@ export const updateContent = mutation({
     await ctx.db.patch(args.messageId, {
       content: args.content,
       ...(args.isComplete !== undefined && { isComplete: args.isComplete }),
+      ...(args.toolCalls !== undefined && { toolCalls: args.toolCalls }),
+      ...(args.reasoningSummary !== undefined && {
+        reasoningSummary: args.reasoningSummary,
+      }),
+      ...(args.thinkingMs !== undefined && { thinkingMs: args.thinkingMs }),
+      ...(args.model !== undefined && { model: args.model }),
     });
     await ctx.db.patch(message.flowId, { updatedAt: Date.now() });
   },
@@ -114,6 +133,31 @@ export const createChunk = mutation({
     if (!flow || flow.userId !== userId) throw new Error("Flow not found");
 
     await ctx.db.insert("messageChunks", {
+      messageId: args.messageId,
+      content: args.content,
+      createdAt: args.createdAt ?? Date.now(),
+    });
+    await ctx.db.patch(message.flowId, { updatedAt: Date.now() });
+  },
+});
+
+export const createReasoningChunk = mutation({
+  args: {
+    messageId: v.id("messages"),
+    content: v.string(),
+    createdAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const message = await ctx.db.get(args.messageId);
+    if (!message) throw new Error("Message not found");
+
+    const flow = await ctx.db.get(message.flowId);
+    if (!flow || flow.userId !== userId) throw new Error("Flow not found");
+
+    await ctx.db.insert("reasoningChunks", {
       messageId: args.messageId,
       content: args.content,
       createdAt: args.createdAt ?? Date.now(),
@@ -197,7 +241,12 @@ export const listByFlow = query({
           .withIndex("by_message", (q) => q.eq("messageId", message._id))
           .order("asc")
           .collect();
-        return { ...message, chunks };
+        const reasoningChunks = await ctx.db
+          .query("reasoningChunks")
+          .withIndex("by_message", (q) => q.eq("messageId", message._id))
+          .order("asc")
+          .collect();
+        return { ...message, chunks, reasoningChunks };
       })
     );
   },

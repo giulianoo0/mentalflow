@@ -24,6 +24,8 @@ interface DrawerContextValue {
   isRightDrawerOpen: boolean;
   isLeftDrawerOpen: boolean;
   setLeftDrawerOpen: (open: boolean) => void;
+  activeFlowNanoId: string | undefined;
+  setActiveFlowNanoId: (id: string | undefined) => void;
 }
 
 const DrawerContext = createContext<DrawerContextValue | null>(null);
@@ -127,8 +129,23 @@ function LeftDrawerNavigator() {
 export default function ChatLayout() {
   const [rightDrawerOpen, setRightDrawerOpen] = useState(false);
   const [leftDrawerOpen, setLeftDrawerOpen] = useState(false);
+  const [activeFlowNanoId, setActiveFlowNanoId] = useState<string | undefined>(undefined);
   const params = useLocalSearchParams();
-  const flowNanoId = (params.flowId as string) || undefined;
+  const paramFlowId = (params.flowId as string) || undefined;
+
+  // Sync activeFlowNanoId with params when they change
+  useEffect(() => {
+    console.log("[Layout] paramFlowId changed:", paramFlowId);
+    if (paramFlowId) {
+      setActiveFlowNanoId(paramFlowId);
+    } else {
+      setActiveFlowNanoId(undefined);
+    }
+  }, [paramFlowId]);
+
+  // Use the active flow ID, falling back to params
+  const currentFlowNanoId = activeFlowNanoId || paramFlowId;
+  console.log("[Layout] currentFlowNanoId:", currentFlowNanoId);
 
   const drawerValue = useMemo(
     () => ({
@@ -137,8 +154,13 @@ export default function ChatLayout() {
       isRightDrawerOpen: rightDrawerOpen,
       isLeftDrawerOpen: leftDrawerOpen,
       setLeftDrawerOpen: setLeftDrawerOpen,
+      activeFlowNanoId: currentFlowNanoId,
+      setActiveFlowNanoId: (id: string | undefined) => {
+        console.log("[Layout] setActiveFlowNanoId called with:", id);
+        setActiveFlowNanoId(id);
+      },
     }),
-    [rightDrawerOpen, leftDrawerOpen],
+    [rightDrawerOpen, leftDrawerOpen, currentFlowNanoId],
   );
 
   return (
@@ -155,12 +177,15 @@ export default function ChatLayout() {
             overlayStyle={styles.overlay}
             swipeEdgeWidth={200}
             swipeMinDistance={5}
-            renderDrawerContent={() => (
-              <WidgetDrawer
-                flowNanoId={flowNanoId}
-                onClose={() => setRightDrawerOpen(false)}
-              />
-            )}
+            renderDrawerContent={() => {
+              console.log("[Layout] Rendering WidgetDrawer with id:", currentFlowNanoId);
+              return (
+                <WidgetDrawer
+                  flowNanoId={currentFlowNanoId}
+                  onClose={() => setRightDrawerOpen(false)}
+                />
+              );
+            }}
           >
             <LeftDrawerNavigator />
           </Drawer>

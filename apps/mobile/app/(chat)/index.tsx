@@ -36,6 +36,7 @@ import { ChatInputBar } from "@/components/chat/chat-input-bar";
 import { StreamdownRN } from "streamdown-rn";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useVoiceSession } from "@/hooks/useVoiceSession";
+import { useDrawerContext } from "./_layout";
 
 const BlinkingCircle = () => {
   const opacity = useSharedValue(0.3);
@@ -181,12 +182,185 @@ const ShimmeringText = () => {
   );
 };
 
+const ShimmerInline = ({ text }: { text: string }) => {
+  const shimmerVal = useSharedValue(0);
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    shimmerVal.value = withRepeat(
+      withTiming(1, { duration: 2000, easing: Easing.linear }),
+      -1,
+      false,
+    );
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => {
+    const translateX = shimmerVal.value * (width + 60) - 60;
+    return { transform: [{ translateX }] };
+  });
+
+  return (
+    <View
+      style={styles.shimmerInlineWrapper}
+      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+    >
+      {width > 0 && (
+        <MaskedView
+          style={{ height: 20, width }}
+          maskElement={
+            <View style={styles.shimmerMask}>
+              <Text style={styles.reasoningLabel}>{text}</Text>
+            </View>
+          }
+        >
+          <View style={{ flex: 1, backgroundColor: "#666" }} />
+          <Animated.View
+            style={[{ position: "absolute", top: 0, bottom: 0, width: 60 }, animatedStyle]}
+          >
+            <LinearGradient
+              colors={["transparent", "rgba(255, 255, 255, 0.9)", "transparent"]}
+              start={{ x: 0, y: 0.5 }}
+              end={{ x: 1, y: 0.5 }}
+              style={{ flex: 1 }}
+            />
+          </Animated.View>
+        </MaskedView>
+      )}
+      {width === 0 && (
+        <Text style={[styles.reasoningLabel, { opacity: 0 }]}>{text}</Text>
+      )}
+    </View>
+  );
+};
+
+const ReasoningPanel = ({
+  isStreaming,
+  reasoningSummary,
+  reasoning,
+  toolCalls,
+  thinkingMs,
+}: {
+  isStreaming: boolean;
+  reasoningSummary?: string;
+  reasoning?: string;
+  toolCalls?: Array<{ name: string; args: any; result: any; createdAt: number }>;
+  thinkingMs?: number;
+}) => {
+  const [isOpen, setIsOpen] = useState(isStreaming);
+  const [elapsed, setElapsed] = useState(1);
+  const startRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (isStreaming) {
+      setIsOpen(true);
+      if (!startRef.current) {
+        startRef.current = Date.now();
+        setElapsed(1);
+      }
+      const timer = setInterval(() => {
+        if (startRef.current) {
+          const next = Math.max(
+            1,
+            Math.round((Date.now() - startRef.current) / 1000),
+          );
+          setElapsed(next);
+        }
+      }, 500);
+      return () => clearInterval(timer);
+    }
+
+    startRef.current = null;
+    if (thinkingMs) {
+      setElapsed(Math.max(1, Math.round(thinkingMs / 1000)));
+    }
+
+    const timer = setTimeout(() => setIsOpen(false), 900);
+    return () => clearTimeout(timer);
+  }, [isStreaming, thinkingMs]);
+
+  const label = isStreaming
+    ? `Pensando ${elapsed}s`
+    : thinkingMs
+      ? `Pensou por ${elapsed}s`
+      : "Pensou";
+
+  return (
+    <View style={styles.reasoningWrapper}>
+      <TouchableOpacity
+        onPress={() => setIsOpen((prev) => !prev)}
+        style={styles.reasoningTrigger}
+        activeOpacity={0.8}
+      >
+        <Ionicons name="sparkles-outline" size={14} color="#7B7B7B" />
+        {isStreaming ? (
+          <ShimmerInline text={label} />
+        ) : (
+          <Text style={styles.reasoningLabel}>{label}</Text>
+        )}
+        <Ionicons
+          name="chevron-down"
+          size={14}
+          color="#7B7B7B"
+          style={{ transform: [{ rotate: isOpen ? "180deg" : "0deg" }] }}
+        />
+      </TouchableOpacity>
+
+      {isOpen && (
+        <View style={styles.reasoningContent}>
+          {reasoning ? (
+            <StreamdownRN isComplete={!isStreaming} theme="light">
+              {reasoning}
+            </StreamdownRN>
+          ) : reasoningSummary ? (
+            <StreamdownRN isComplete={!isStreaming} theme="light">
+              {reasoningSummary}
+            </StreamdownRN>
+          ) : null}
+          {toolCalls && toolCalls.length > 0 ? (
+            <View style={styles.toolCallList}>
+              {toolCalls.map((call, index) => (
+                <View key={`${call.name}-${index}`} style={styles.toolCallRow}>
+                  <Text style={styles.toolCallName}>{call.name}</Text>
+                  <Text style={styles.toolCallMeta}>
+                    {formatToolCall(call)}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : (
+            !isStreaming && (
+              <Text style={styles.toolCallMeta}>Sem ferramentas usadas.</Text>
+            )
+          )}
+        </View>
+      )}
+    </View>
+  );
+};
+
+const formatToolCall = (call: {
+  name: string;
+  result: any;
+}) => {
+  if (call.name === "upsertWidgets") {
+    const upserts = call.result?.upserts ?? 0;
+    const links = call.result?.links ?? 0;
+    return `widgets=${upserts} links=${links}`;
+  }
+  if (call.name === "searchWidgets") {
+    const count = call.result?.count ?? 0;
+    return `encontrados=${count}`;
+  }
+  return "executado";
+};
+
 export default function ChatScreen() {
   const [inputText, setInputText] = React.useState("");
   const { height: keyboardHeight } = useReanimatedKeyboardAnimation();
   const { height: screenHeight } = useWindowDimensions();
   const router = useRouter();
   const params = useLocalSearchParams();
+  const { setActiveFlowNanoId } = useDrawerContext();
   const [pendingAssistant, setPendingAssistant] = React.useState<{
     requestId: string;
     createdAt: number;
@@ -203,7 +377,13 @@ export default function ChatScreen() {
     undefined,
   );
   const flowNanoId = activeFlowId || paramFlowId;
+  console.log("[ChatScreen] Computed flowNanoId:", flowNanoId);
   const [isCreatingFlow, setIsCreatingFlow] = useState(false);
+
+  // Sync local flow ID with context when it changes
+  useEffect(() => {
+    setActiveFlowNanoId(flowNanoId);
+  }, [flowNanoId, setActiveFlowNanoId]);
 
   // Track param changes to reset local override (activeThreadId) when user navigates
   const prevParamFlowIdRef = useRef(paramFlowId);
@@ -359,6 +539,16 @@ export default function ChatScreen() {
           : msg.content,
       isComplete: msg.isComplete ?? !(msg.chunks && msg.chunks.length > 0),
       createdAt: new Date(msg.createdAt ?? msg._creationTime),
+      reasoningSummary: msg.reasoningSummary as string | undefined,
+      reasoning:
+        msg.reasoningChunks && msg.reasoningChunks.length > 0
+          ? msg.reasoningChunks.map((c: any) => c.content).join("")
+          : undefined,
+      toolCalls: msg.toolCalls as
+        | Array<{ name: string; args: any; result: any; createdAt: number }>
+        | undefined,
+      thinkingMs: msg.thinkingMs as number | undefined,
+      model: msg.model as string | undefined,
     }));
 
     if (pendingAssistant) {
@@ -387,7 +577,7 @@ export default function ChatScreen() {
       (msg: any) =>
         msg.role === "assistant" &&
         new Date(msg.createdAt ?? msg._creationTime).getTime() >=
-          pendingAssistant.createdAt,
+        pendingAssistant.createdAt,
     );
     if (hasAssistant) {
       setPendingAssistant(null);
@@ -584,19 +774,19 @@ export default function ChatScreen() {
     const hasMultipleTurns = messages.length > 2;
     const minAssistantHeight =
       isLastAssistantMessage &&
-      hasMultipleTurns &&
-      lastUserMessageHeight > 0 &&
-      chatHeaderHeight > 0 &&
-      inputBarHeight > 0
+        hasMultipleTurns &&
+        lastUserMessageHeight > 0 &&
+        chatHeaderHeight > 0 &&
+        inputBarHeight > 0
         ? Math.max(
-            0,
-            screenHeight -
-              chatHeaderHeight -
-              inputBarHeight -
-              topSpacing -
-              lastUserMessageHeight -
-              assistantContentPadding,
-          ) + 80
+          0,
+          screenHeight -
+          chatHeaderHeight -
+          inputBarHeight -
+          topSpacing -
+          lastUserMessageHeight -
+          assistantContentPadding,
+        ) + 80
         : undefined;
 
     return (
@@ -621,7 +811,17 @@ export default function ChatScreen() {
         ) : (
           <>
             <View style={styles.assistantBody}>
-              {text.length === 0 && isMsgStreaming ? (
+              {!isUser &&
+                (item.reasoning || item.reasoningSummary || item.toolCalls) ? (
+                <ReasoningPanel
+                  isStreaming={isMsgStreaming}
+                  reasoningSummary={item.reasoningSummary}
+                  reasoning={item.reasoning}
+                  toolCalls={item.toolCalls}
+                  thinkingMs={item.thinkingMs}
+                />
+              ) : null}
+              {text.length === 0 && isMsgStreaming && !item.reasoning ? (
                 <View style={{ paddingTop: 8 }}>
                   <BlinkingCircle />
                 </View>
@@ -668,18 +868,18 @@ export default function ChatScreen() {
             renderItem={
               isLoading
                 ? () => (
-                    <View
-                      style={[styles.messageContainer, styles.assistantMessage]}
-                    >
-                      <Skeleton
-                        width="70%"
-                        height={20}
-                        borderRadius={10}
-                        style={{ marginBottom: 8 }}
-                      />
-                      <Skeleton width="40%" height={16} borderRadius={8} />
-                    </View>
-                  )
+                  <View
+                    style={[styles.messageContainer, styles.assistantMessage]}
+                  >
+                    <Skeleton
+                      width="70%"
+                      height={20}
+                      borderRadius={10}
+                      style={{ marginBottom: 8 }}
+                    />
+                    <Skeleton width="40%" height={16} borderRadius={8} />
+                  </View>
+                )
                 : renderMessage
             }
             keyExtractor={(item, index) =>
@@ -753,6 +953,7 @@ const styles = StyleSheet.create({
   messageContainer: {
     marginBottom: 20,
     maxWidth: "100%",
+    position: "relative",
   },
   userMessage: {
     alignSelf: "flex-end",
@@ -771,6 +972,56 @@ const styles = StyleSheet.create({
     flexGrow: 0,
     flexShrink: 0,
     alignItems: "flex-start",
+  },
+  shimmerInlineWrapper: {
+    minWidth: 70,
+  },
+  shimmerMask: {
+    flex: 1,
+    justifyContent: "center",
+  },
+  reasoningWrapper: {
+    marginTop: 0,
+    marginBottom: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 0,
+  },
+  reasoningTrigger: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  reasoningLabel: {
+    fontSize: 12,
+    color: "#7B7B7B",
+    fontWeight: "500",
+  },
+  reasoningContent: {
+    marginTop: 10,
+    paddingLeft: 18,
+  },
+  reasoningText: {
+    fontSize: 12,
+    color: "#5A5A5A",
+    marginBottom: 6,
+  },
+  toolCallList: {
+    gap: 6,
+  },
+  toolCallRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  toolCallName: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#5C5C5C",
+    textTransform: "uppercase",
+  },
+  toolCallMeta: {
+    fontSize: 11,
+    color: "#888",
   },
   userText: {
     fontSize: 16,

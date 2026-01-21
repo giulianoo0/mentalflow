@@ -1,5 +1,22 @@
-export type WidgetType = "task" | "person" | "event" | "note";
-export type LinkKind = "mentions" | "related" | "depends_on";
+export type WidgetType =
+  | "task"
+  | "person"
+  | "event"
+  | "note"
+  | "goal"
+  | "habit"
+  | "health";
+
+export type LinkKind =
+  | "mentions"
+  | "related_to"
+  | "assigned_to"
+  | "scheduled_for"
+  | "depends_on"
+  | "about"
+  | "part_of"
+  | "tracked_by"
+  | "associated_with";
 
 export type WidgetInput = {
   type: WidgetType;
@@ -11,11 +28,25 @@ export type WidgetInput = {
   person?: {
     role?: string | null;
     contactInfo?: string | null;
+    avatarUrl?: string | null;
   };
   event?: {
     startsAt?: number | null;
     endsAt?: number | null;
     location?: string | null;
+  };
+  habit?: {
+    frequency?: "daily" | "weekly" | null;
+    streak?: number | null;
+  };
+  health?: {
+    dosage?: string | null;
+    schedule?: string | null;
+    status?: "active" | "paused" | "completed" | null;
+  };
+  goal?: {
+    targetValue?: number | null;
+    progress?: number | null;
   };
   relatedTitles?: string[];
 };
@@ -251,16 +282,36 @@ export function widgetCanonicalPayload(widget: WidgetInput) {
     isCompleted: widget.isCompleted ?? null,
     person: widget.person
       ? {
-          role: widget.person.role?.trim() || "",
-          contactInfo: widget.person.contactInfo?.trim() || "",
-        }
+        role: widget.person.role?.trim() || "",
+        contactInfo: widget.person.contactInfo?.trim() || "",
+        avatarUrl: widget.person.avatarUrl?.trim() || "",
+      }
       : null,
     event: widget.event
       ? {
-          startsAt: widget.event.startsAt ?? null,
-          endsAt: widget.event.endsAt ?? null,
-          location: widget.event.location?.trim() || "",
-        }
+        startsAt: widget.event.startsAt ?? null,
+        endsAt: widget.event.endsAt ?? null,
+        location: widget.event.location?.trim() || "",
+      }
+      : null,
+    habit: widget.habit
+      ? {
+        frequency: widget.habit.frequency ?? null,
+        streak: widget.habit.streak ?? null,
+      }
+      : null,
+    health: widget.health
+      ? {
+        dosage: widget.health.dosage?.trim() || "",
+        schedule: widget.health.schedule?.trim() || "",
+        status: widget.health.status ?? null,
+      }
+      : null,
+    goal: widget.goal
+      ? {
+        targetValue: widget.goal.targetValue ?? null,
+        progress: widget.goal.progress ?? null,
+      }
       : null,
     relatedTitles:
       widget.relatedTitles?.map((title) => normalizeTitle(title)) || [],
@@ -286,6 +337,9 @@ export function widgetDataFromInput(widget: WidgetInput) {
     isCompleted: widget.isCompleted,
     person: widget.person,
     event: widget.event,
+    habit: widget.habit,
+    health: widget.health,
+    goal: widget.goal,
     relatedTitles: widget.relatedTitles || [],
   };
 }

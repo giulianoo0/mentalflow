@@ -10,11 +10,37 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
-import { useQuery } from "convex/react";
+import { Canvas, Path, Skia } from "@shopify/react-native-skia";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../packages/fn/convex/_generated/api";
 
 const { width: screenWidth } = Dimensions.get("window");
-const cardWidth = (screenWidth - 16 * 2 - 14) / 2;
+const horizontalPadding = 16;
+const cardGap = 14;
+const contentWidth = screenWidth - horizontalPadding * 2;
+const compactMinWidth = contentWidth * 0.36;
+const wideMinWidth = contentWidth * 0.58;
+
+type WidgetType = "task" | "person" | "event" | "note" | "goal" | "habit" | "health";
+
+interface Widget {
+  nanoId: string;
+  type: WidgetType;
+  title: string;
+  description?: string;
+  data: {
+    dueDate?: number;
+    priority?: "high" | "medium" | "low";
+    isCompleted?: boolean;
+    person?: { role?: string; contactInfo?: string; avatarUrl?: string };
+    event?: { startsAt?: number; endsAt?: number; location?: string };
+    habit?: { frequency?: "daily" | "weekly"; streak?: number };
+    health?: { dosage?: string; schedule?: string; status?: "active" | "paused" | "completed" };
+    goal?: { targetValue?: number; progress?: number };
+    relatedTitles?: string[];
+    relatedTitlesCompleted?: boolean[];
+  };
+}
 
 interface WidgetDrawerProps {
   flowNanoId: string | undefined;
@@ -22,15 +48,16 @@ interface WidgetDrawerProps {
 }
 
 export function WidgetDrawer({ flowNanoId, onClose }: WidgetDrawerProps) {
+  console.log("[WidgetDrawer] Render with flowNanoId:", flowNanoId);
   const insets = useSafeAreaInsets();
   const widgets = useQuery(
-    (api as any).widgets.listByFlow,
+    api.widgets.listByFlow,
     flowNanoId ? { flowNanoId } : "skip",
   );
 
-  const widgetCards = widgets || [];
-  const leftCards = widgetCards.filter((_: any, i: number) => i % 2 === 0);
-  const rightCards = widgetCards.filter((_: any, i: number) => i % 2 !== 0);
+  console.log("[WidgetDrawer] Query result:", widgets ? `found ${widgets.length} widgets` : "loading/skip");
+
+  const widgetCards: Widget[] = widgets || [];
 
   return (
     <LinearGradient
@@ -45,17 +72,10 @@ export function WidgetDrawer({ flowNanoId, onClose }: WidgetDrawerProps) {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.masonryContainer}>
-          <View style={styles.column}>
-            {leftCards.map((widget: any) => (
-              <WidgetCard key={widget.nanoId} widget={widget} />
-            ))}
-          </View>
-          <View style={styles.column}>
-            {rightCards.map((widget: any) => (
-              <WidgetCard key={widget.nanoId} widget={widget} />
-            ))}
-          </View>
+        <View style={styles.grid}>
+          {widgetCards.map((widget) => (
+            <WidgetCard key={widget.nanoId} widget={widget} />
+          ))}
         </View>
 
         {widgetCards.length === 0 && (
@@ -96,71 +116,409 @@ export function WidgetDrawer({ flowNanoId, onClose }: WidgetDrawerProps) {
   );
 }
 
-function WidgetCard({ widget }: { widget: any }) {
+function WidgetCard({ widget }: { widget: Widget }) {
+  const updateChecklist = useMutation(api.widgets.updateRelatedTitlesCompletion);
   const data = widget.data || {};
   const isTask = widget.type === "task";
-  const isPerson = widget.type === "person";
+  const isGoal = widget.type === "goal";
+  const isHabit = widget.type === "habit";
+  const isHealth = widget.type === "health";
   const isEvent = widget.type === "event";
+  const isPerson = widget.type === "person";
+  const isNote = widget.type === "note";
+
+  const typeLabels: Record<WidgetType, string> = {
+    task: "TODO",
+    goal: "Meta",
+    habit: "Hábito",
+    health: "Saúde",
+    event: "Evento",
+    person: "Pessoa",
+    note: "Nota",
+  };
+
+  const typeColors: Record<WidgetType, string> = {
+    task: "#FF6B6B",
+    goal: "#4ECDC4",
+    habit: "#A855F7",
+    health: "#22C55E",
+    event: "#3B82F6",
+    person: "#F59E0B",
+    note: "#6B7280",
+  };
+
+  const relatedTitles = React.useMemo(() => {
+    if (!Array.isArray(data.relatedTitles)) return [];
+    return data.relatedTitles.map((title) => title.trim()).filter(Boolean);
+  }, [data.relatedTitles]);
+  const todoItems = React.useMemo(() => {
+    if (!isTask) return [];
+    if (relatedTitles.length > 0) return relatedTitles;
+    if (widget.description) {
+      const cleaned = widget.description.trim();
+      return cleaned ? [cleaned] : [];
+    }
+    return [];
+  }, [isTask, relatedTitles, widget.description]);
+  const hasHealthChecklist = isHealth && relatedTitles.length > 0;
+  const hasTodoList = isTask && todoItems.length > 0;
+  const checklistItems = hasHealthChecklist ? relatedTitles : hasTodoList ? todoItems : [];
+  const hasChecklist = checklistItems.length > 0;
+  const initialChecked = React.useMemo(() => {
+    if (!hasChecklist) return [] as boolean[];
+    const saved = Array.isArray(data.relatedTitlesCompleted)
+      ? data.relatedTitlesCompleted
+      : [];
+    if (saved.length === checklistItems.length) return saved;
+    return checklistItems.map(() => false);
+  }, [checklistItems, data.relatedTitlesCompleted, hasChecklist]);
+  const [checkedItems, setCheckedItems] = React.useState<boolean[]>(initialChecked);
+  const checklistSignature = React.useMemo(
+    () => `${widget.nanoId}:${checklistItems.join("|")}`,
+    [widget.nanoId, checklistItems],
+  );
+
+  React.useEffect(() => {
+    if (!hasChecklist) return;
+    setCheckedItems((prev) =>
+      checklistItems.map((_, index) => prev[index] ?? initialChecked[index] ?? false),
+    );
+  }, [checklistSignature, hasChecklist, checklistItems, initialChecked]);
+
+  const totalItems = hasChecklist ? checklistItems.length : 0;
+  const completedItems = hasChecklist
+    ? checkedItems.filter(Boolean).length
+    : 0;
+  const pendingItems = totalItems - completedItems;
+  const progressPercent = totalItems > 0
+    ? Math.round((completedItems / totalItems) * 100)
+    : 0;
+  const checklistAccent = isHealth ? "#4AA9FF" : typeColors[widget.type];
+  const isWideCard =
+    (isHealth && hasHealthChecklist) ||
+    (isTask && hasTodoList && todoItems.length >= 4);
+  const cardFlexBasis = isWideCard ? wideMinWidth : compactMinWidth;
+
+  const shouldShowDescription =
+    !!widget.description && !isTask && !(isHealth && hasHealthChecklist);
 
   return (
-    <View style={[styles.card, { width: cardWidth }]}>
-      <View style={styles.cardHeader}>
-        <Text style={styles.cardTitle}>{widget.title}</Text>
-        <View style={styles.cardTag}>
-          <Text style={styles.cardTagText}>{widget.type}</Text>
+    <View style={[styles.card, { flexBasis: cardFlexBasis, flexGrow: 1 }]}> 
+      {(isHealth && hasHealthChecklist) ? (
+        <View style={styles.healthHeader}>
+          <View style={styles.healthHeaderText}>
+            <Text style={styles.cardTitle}>{widget.title}</Text>
+            <Text style={styles.groupSummary}>
+              {pendingItems}/{totalItems} pendentes
+            </Text>
+          </View>
+          <ProgressRing
+            progress={progressPercent}
+            size={56}
+            strokeWidth={5}
+            color={checklistAccent}
+            trackColor="#E6F3FF"
+          />
         </View>
-      </View>
+      ) : isTask ? (
+        <View style={styles.todoHeader}>
+          <Text style={styles.cardTitle}>{widget.title}</Text>
+          <View style={[styles.cardTag, { backgroundColor: `${typeColors.task}15` }]}>
+            <Text style={[styles.cardTagText, { color: typeColors.task }]}>TODO</Text>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.cardHeader}>
+          <Text style={styles.cardTitle}>{widget.title}</Text>
+          <View style={[styles.cardTag, { backgroundColor: `${typeColors[widget.type]}15` }]}> 
+            <Text style={[styles.cardTagText, { color: typeColors[widget.type] }]}>
+              {typeLabels[widget.type]}
+            </Text>
+          </View>
+        </View>
+      )}
 
-      {widget.description ? (
+      {shouldShowDescription ? (
         <Text style={styles.cardBodyText}>{widget.description}</Text>
       ) : null}
 
-      {isTask && (
-        <View style={styles.taskMeta}>
-          <View style={styles.taskRow}>
-            <View style={styles.taskDot} />
-            <Text style={styles.taskLabel}>Prazo</Text>
-            <Text style={styles.taskValue}>
-              {formatDate(data.dueDate)}
-            </Text>
-          </View>
-          <View style={styles.taskRow}>
-            <View style={[styles.taskDot, styles.taskDotAccent]} />
-            <Text style={styles.taskLabel}>Prioridade</Text>
-            <Text style={styles.taskValue}>{data.priority || "media"}</Text>
-          </View>
+      {(isTask && hasTodoList) && (
+        <View style={styles.checklist}>
+          {todoItems.map((item, index) => {
+            const isChecked = checkedItems[index];
+            return (
+              <Pressable
+                key={`${widget.nanoId}-task-${index}`}
+                style={styles.checklistRow}
+                onPress={() => {
+                  const next = checkedItems.map((value, itemIndex) =>
+                    itemIndex === index ? !value : value,
+                  );
+                  setCheckedItems(next);
+                  void updateChecklist({
+                    nanoId: widget.nanoId,
+                    checked: next,
+                  });
+                }}
+              >
+                <View
+                  style={[
+                    styles.checklistBox,
+                    { borderColor: checklistAccent },
+                    isChecked && {
+                      backgroundColor: checklistAccent,
+                      borderColor: checklistAccent,
+                    },
+                  ]}
+                >
+                  {isChecked && (
+                    <Ionicons name="checkmark" size={12} color="#FFF" />
+                  )}
+                </View>
+                <Text
+                  style={[
+                    styles.checklistText,
+                    isChecked && styles.checklistTextChecked,
+                  ]}
+                >
+                  {item}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
       )}
 
+      {/* Todo list */}
+      {isTask && !hasTodoList && (
+        <Text style={styles.todoEmpty}>Sem tarefas listadas.</Text>
+      )}
+
+      {/* Goal display with progress */}
+      {isGoal && (
+        <View style={styles.goalMeta}>
+          {data.goal?.progress !== undefined && (
+            <View style={styles.progressContainer}>
+              <View style={styles.progressCircle}>
+                <Text style={styles.progressText}>{data.goal.progress}%</Text>
+              </View>
+            </View>
+          )}
+          {data.goal?.targetValue && (
+            <Text style={styles.targetText}>Meta: {data.goal.targetValue}</Text>
+          )}
+        </View>
+      )}
+
+      {/* Habit display with streak */}
+      {isHabit && (
+        <View style={styles.habitMeta}>
+          {data.habit?.frequency && (
+            <View style={styles.habitRow}>
+              <Ionicons name="repeat-outline" size={14} color="#A855F7" />
+              <Text style={styles.habitText}>
+                {data.habit.frequency === "daily" ? "Diário" : "Semanal"}
+              </Text>
+            </View>
+          )}
+          {data.habit?.streak !== undefined && (
+            <View style={styles.streakBadge}>
+              <Ionicons name="flame" size={14} color="#FF6B6B" />
+              <Text style={styles.streakText}>{data.habit.streak}</Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* Health display */}
+      {isHealth && hasHealthChecklist && (
+        <View style={styles.healthChecklist}>
+          {relatedTitles.map((item, index) => {
+            const isChecked = checkedItems[index];
+            const match = item.match(/^(\d{1,2}[:h]\d{2})\s*(.*)$/i);
+            const time = match ? match[1] : "";
+            const label = match ? match[2] : item;
+            const parts = label.split(" - ");
+            const mainLabel = parts[0];
+            const detail = parts.slice(1).join(" - ");
+            return (
+              <Pressable
+                key={`${widget.nanoId}-health-${index}`}
+                style={styles.healthChecklistRow}
+                onPress={() => {
+                  const next = checkedItems.map((value, itemIndex) =>
+                    itemIndex === index ? !value : value,
+                  );
+                  setCheckedItems(next);
+                  void updateChecklist({
+                    nanoId: widget.nanoId,
+                    checked: next,
+                  });
+                }}
+              >
+                <View
+                  style={[
+                    styles.checklistBox,
+                    { borderColor: checklistAccent },
+                    isChecked && {
+                      backgroundColor: checklistAccent,
+                      borderColor: checklistAccent,
+                    },
+                  ]}
+                >
+                  {isChecked && (
+                    <Ionicons name="checkmark" size={12} color="#FFF" />
+                  )}
+                </View>
+                <View style={styles.healthChecklistContent}>
+                  {time ? (
+                    <Text style={styles.healthTime}>{time}</Text>
+                  ) : null}
+                  <View style={styles.healthLabelGroup}>
+                    <Text style={styles.healthItemText}>{mainLabel}</Text>
+                    {detail ? (
+                      <Text style={styles.healthItemDetail}>{detail}</Text>
+                    ) : null}
+                  </View>
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+
+      {isHealth && !hasChecklist && (
+        <View style={styles.healthMeta}>
+          {data.health?.dosage && (
+            <View style={styles.healthRow}>
+              <Ionicons name="medical-outline" size={14} color="#22C55E" />
+              <Text style={styles.healthText}>{data.health.dosage}</Text>
+            </View>
+          )}
+          {data.health?.schedule && (
+            <View style={styles.healthRow}>
+              <Ionicons name="time-outline" size={14} color="#22C55E" />
+              <Text style={styles.healthText}>{data.health.schedule}</Text>
+            </View>
+          )}
+          {data.health?.status && (
+            <View style={[
+              styles.statusBadge,
+              data.health.status === "active" && styles.statusActive,
+              data.health.status === "paused" && styles.statusPaused,
+              data.health.status === "completed" && styles.statusCompleted,
+            ]}>
+              <Text style={styles.statusText}>
+                {data.health.status === "active" ? "Ativo" :
+                  data.health.status === "paused" ? "Pausado" : "Concluído"}
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* Event display */}
+      {isEvent && (
+        <View style={styles.eventMeta}>
+          {data.event?.startsAt && (
+            <View style={styles.eventRow}>
+              <Ionicons name="calendar-outline" size={14} color="#3B82F6" />
+              <Text style={styles.eventText}>{formatDateTime(data.event.startsAt)}</Text>
+            </View>
+          )}
+          {data.event?.location && (
+            <View style={styles.eventRow}>
+              <Ionicons name="location-outline" size={14} color="#3B82F6" />
+              <Text style={styles.eventText}>{data.event.location}</Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* Person display */}
       {isPerson && (
-        <View style={styles.inlineList}>
+        <View style={styles.personMeta}>
           {data.person?.role && (
-            <Text style={styles.inlineText}>{data.person.role}</Text>
+            <Text style={styles.personRole}>{data.person.role}</Text>
           )}
           {data.person?.contactInfo && (
-            <Text style={styles.inlineText}>{data.person.contactInfo}</Text>
+            <Text style={styles.personContact}>{data.person.contactInfo}</Text>
           )}
         </View>
       )}
 
-      {isEvent && (
-        <View style={styles.inlineList}>
-          <Text style={styles.inlineText}>
-            {formatDate(data.event?.startsAt)}
-          </Text>
-          {data.event?.location && (
-            <Text style={styles.inlineText}>{data.event.location}</Text>
-          )}
-        </View>
-      )}
+      {/* Note has no special fields, just title/description */}
     </View>
   );
 }
 
-function formatDate(value?: number) {
+function formatDateTime(value?: number) {
   if (!value) return "Sem data";
   const date = new Date(value);
-  return `${date.getDate()}/${date.getMonth() + 1}`;
+  return `${date.getDate()}/${date.getMonth() + 1} ${date.getHours()}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function ProgressRing({
+  progress,
+  size,
+  strokeWidth,
+  color,
+  trackColor,
+}: {
+  progress: number;
+  size: number;
+  strokeWidth: number;
+  color: string;
+  trackColor: string;
+}) {
+  const clamped = Math.min(100, Math.max(0, progress));
+  const displayValue = Math.round(clamped);
+  const radius = (size - strokeWidth) / 2;
+  const center = size / 2;
+  const sweepAngle = (clamped / 100) * 360;
+  const arcPath = React.useMemo(() => {
+    const path = Skia.Path.Make();
+    path.addArc(
+      Skia.XYWHRect(
+        strokeWidth / 2,
+        strokeWidth / 2,
+        size - strokeWidth,
+        size - strokeWidth,
+      ),
+      -90,
+      sweepAngle,
+    );
+    return path;
+  }, [size, strokeWidth, sweepAngle]);
+  const trackPath = React.useMemo(() => {
+    const path = Skia.Path.Make();
+    path.addCircle(center, center, radius);
+    return path;
+  }, [center, radius]);
+
+  return (
+    <View style={{ width: size, height: size }}>
+      <Canvas style={{ width: size, height: size }}>
+        <Path
+          path={trackPath}
+          color={trackColor}
+          style="stroke"
+          strokeWidth={strokeWidth}
+          strokeCap="round"
+        />
+        <Path
+          path={arcPath}
+          color={color}
+          style="stroke"
+          strokeWidth={strokeWidth}
+          strokeCap="round"
+        />
+      </Canvas>
+      <View style={styles.progressRingLabel}>
+        <Text style={styles.progressRingText}>{displayValue}%</Text>
+      </View>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -211,12 +569,11 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 3,
   },
-  masonryContainer: {
+  grid: {
     flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  column: {
-    gap: 14,
+    flexWrap: "wrap",
+    columnGap: cardGap,
+    rowGap: cardGap,
   },
   card: {
     backgroundColor: "#FFFFFF",
@@ -231,6 +588,18 @@ const styles = StyleSheet.create({
   cardHeader: {
     gap: 6,
   },
+  todoHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  groupSummary: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "#8C8C8C",
+    fontWeight: "600",
+  },
   cardTitle: {
     fontSize: 15,
     fontWeight: "700",
@@ -241,12 +610,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 999,
-    backgroundColor: "#F2F4F7",
   },
   cardTagText: {
     fontSize: 11,
     fontWeight: "600",
-    color: "#666",
     textTransform: "uppercase",
   },
   cardBodyText: {
@@ -255,41 +622,213 @@ const styles = StyleSheet.create({
     marginTop: 10,
     lineHeight: 18,
   },
-  taskMeta: {
+  checklist: {
+    marginTop: 12,
+    gap: 10,
+  },
+  checklistRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  checklistBox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  checklistText: {
+    fontSize: 13,
+    color: "#2E2E2E",
+    flex: 1,
+  },
+  checklistTextChecked: {
+    color: "#9C9C9C",
+    textDecorationLine: "line-through",
+  },
+  todoEmpty: {
+    marginTop: 12,
+    fontSize: 12,
+    color: "#8C8C8C",
+  },
+  // Goal styles
+  goalMeta: {
+    marginTop: 12,
+    alignItems: "center",
+  },
+  progressContainer: {
+    marginBottom: 8,
+  },
+  progressCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 4,
+    borderColor: "#4ECDC4",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  progressText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#4ECDC4",
+  },
+  targetText: {
+    fontSize: 12,
+    color: "#666",
+  },
+  // Habit styles
+  habitMeta: {
     marginTop: 12,
     gap: 8,
   },
-  taskRow: {
+  habitRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
   },
-  taskDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#E0E0E0",
-  },
-  taskDotAccent: {
-    backgroundColor: "#FF5A5F",
-  },
-  taskLabel: {
+  habitText: {
     fontSize: 12,
-    color: "#8C8C8C",
+    color: "#666",
   },
-  taskValue: {
+  streakBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#FFF5F5",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    alignSelf: "flex-start",
+  },
+  streakText: {
     fontSize: 12,
-    color: "#1B1B1D",
-    fontWeight: "600",
+    fontWeight: "700",
+    color: "#FF6B6B",
   },
-  inlineList: {
-    marginTop: 10,
+  // Health styles
+  healthMeta: {
+    marginTop: 12,
     gap: 6,
   },
-  inlineText: {
+  healthHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  healthHeaderText: {
+    flex: 1,
+  },
+  healthChecklist: {
+    marginTop: 14,
+    gap: 12,
+  },
+  healthChecklistRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  healthChecklistContent: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    flex: 1,
+  },
+  healthTime: {
+    fontSize: 12,
+    color: "#1B1B1D",
+    fontWeight: "700",
+    minWidth: 46,
+  },
+  healthLabelGroup: {
+    flex: 1,
+  },
+  healthItemText: {
+    fontSize: 12,
+    color: "#2E2E2E",
+    fontWeight: "600",
+  },
+  healthItemDetail: {
+    fontSize: 11,
+    color: "#7A7A7A",
+    marginTop: 2,
+  },
+  healthRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  healthText: {
     fontSize: 12,
     color: "#444",
   },
+  progressRingLabel: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  progressRingText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#1B1B1D",
+  },
+  statusBadge: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    marginTop: 4,
+  },
+  statusActive: {
+    backgroundColor: "#DCFCE7",
+  },
+  statusPaused: {
+    backgroundColor: "#FEF9C3",
+  },
+  statusCompleted: {
+    backgroundColor: "#E0E7FF",
+  },
+  statusText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#333",
+  },
+  // Event styles
+  eventMeta: {
+    marginTop: 12,
+    gap: 6,
+  },
+  eventRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  eventText: {
+    fontSize: 12,
+    color: "#444",
+  },
+  // Person styles
+  personMeta: {
+    marginTop: 10,
+    gap: 4,
+  },
+  personRole: {
+    fontSize: 12,
+    color: "#F59E0B",
+    fontWeight: "600",
+  },
+  personContact: {
+    fontSize: 12,
+    color: "#666",
+  },
+  // Empty state
   emptyState: {
     paddingTop: 80,
     alignItems: "center",

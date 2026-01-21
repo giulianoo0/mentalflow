@@ -3,7 +3,7 @@ import { action } from "./_generated/server";
 import { api } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createOpenAI } from "@ai-sdk/openai";
-import { generateObject, smoothStream, streamText } from "ai";
+import { smoothStream, stepCountIs, streamText } from "ai";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import type { Id } from "./_generated/dataModel";
@@ -30,7 +30,7 @@ Mantenha um tom de conversa natural e amigável.`;
 const widgetSchema = z.object({
   widgets: z.array(
     z.object({
-      type: z.enum(["task", "person", "event", "note"]),
+      type: z.enum(["task", "person", "event", "note", "goal", "habit", "health"]),
       title: z.string().min(1),
       description: z.string().nullable(),
       dueDate: z.number().nullable(),
@@ -39,12 +39,26 @@ const widgetSchema = z.object({
       person: z.object({
         role: z.string().nullable(),
         contactInfo: z.string().nullable(),
-      }),
+        avatarUrl: z.string().nullable(),
+      }).nullable(),
       event: z.object({
         startsAt: z.number().nullable(),
         endsAt: z.number().nullable(),
         location: z.string().nullable(),
-      }),
+      }).nullable(),
+      habit: z.object({
+        frequency: z.enum(["daily", "weekly"]).nullable(),
+        streak: z.number().nullable(),
+      }).nullable(),
+      health: z.object({
+        dosage: z.string().nullable(),
+        schedule: z.string().nullable(),
+        status: z.enum(["active", "paused", "completed"]).nullable(),
+      }).nullable(),
+      goal: z.object({
+        targetValue: z.number().nullable(),
+        progress: z.number().nullable(),
+      }).nullable(),
       relatedTitles: z.array(z.string()).nullable(),
     }),
   ),
@@ -52,7 +66,17 @@ const widgetSchema = z.object({
     z.object({
       fromTitle: z.string().min(1),
       toTitle: z.string().min(1),
-      kind: z.enum(["mentions", "related", "depends_on"]),
+      kind: z.enum([
+        "mentions",
+        "related_to",
+        "assigned_to",
+        "scheduled_for",
+        "depends_on",
+        "about",
+        "part_of",
+        "tracked_by",
+        "associated_with",
+      ]),
     }),
   ),
 });
@@ -94,14 +118,21 @@ export const sendMessageWorkflow = action({
       createdAt: args.clientCreatedAt,
     });
 
-    const [messages, existingWidgets] = await Promise.all([
-      ctx.runQuery(api.messages.listByFlow, { flowNanoId }) as Promise<
-        Array<{ role: "user" | "assistant"; content: string }>
-      >,
+    const [messagesRaw, existingWidgets] = await Promise.all([
+      ctx.runQuery(api.messages.listByFlow, { flowNanoId }) as Promise<any[]>,
       ctx.runQuery(api.widgets.listByFlow, { flowNanoId }) as Promise<
         WidgetSummary[]
       >,
     ]);
+
+    const messages = messagesRaw.map((message) => ({
+      role: message.role as "user" | "assistant",
+      content:
+        message.chunks && message.chunks.length > 0
+          ? message.chunks.map((chunk: any) => chunk.content).join("")
+          : message.content,
+      reasoningSummary: message.reasoningSummary as string | undefined,
+    }));
 
     const assistantMessageNanoId = nanoid();
     const assistantMessage = await ctx.runMutation(api.messages.insert, {
@@ -118,25 +149,14 @@ export const sendMessageWorkflow = action({
     }
     const assistantMessageId = assistantMessage._id as Id<"messages">;
 
-    const [assistantReply, widgetExtraction] = await Promise.all([
-      streamAssistantWorker(ctx, {
-        assistantMessageId,
-        messages,
-      }),
-      runWidgetWorker(args.content, existingWidgets),
-    ]);
-
-    const plan = resolveWidgetPlan({
-      extracted: widgetExtraction.widgets,
-      links: widgetExtraction.links,
-      existing: existingWidgets,
-      sourceMessageNanoId: userMessageNanoId,
-    });
-
-    await ctx.runMutation(api.widgets.applyUpsertPlan, {
+    const assistantReply = await streamAssistantWorker(ctx, {
+      assistantMessageId,
       flowId,
-      upserts: plan.upserts,
-      linkUpserts: plan.linkUpserts,
+      flowNanoId,
+      sourceMessageNanoId: userMessageNanoId,
+      messages,
+      existingWidgets,
+      requestId,
     });
 
     console.log("chat.sendMessageWorkflow:done", {
@@ -155,16 +175,30 @@ export const sendMessageWorkflow = action({
 });
 
 async function streamAssistantWorker(
-  ctx: { runMutation: any },
+  ctx: { runMutation: any; runQuery: any },
   input: {
     assistantMessageId: Id<"messages">;
-    messages: Array<{ role: "user" | "assistant"; content: string }>;
+    flowId: Id<"flows">;
+    flowNanoId: string;
+    sourceMessageNanoId: string;
+    messages: Array<{
+      role: "user" | "assistant";
+      content: string;
+      reasoningSummary?: string;
+    }>;
+    existingWidgets: WidgetSummary[];
+    requestId: string;
   },
 ) {
-  const conversation = input.messages.map((message) => ({
-    role: message.role,
-    content: message.content,
-  }));
+  const conversation = input.messages.map((message) => {
+    const summary = message.reasoningSummary
+      ? `\n\n[Resumo de raciocinio: ${message.reasoningSummary}]`
+      : "";
+    return {
+      role: message.role,
+      content: `${message.content}${summary}`.trim(),
+    };
+  });
 
   let buffer = "";
   let fullText = "";
@@ -172,17 +206,217 @@ async function streamAssistantWorker(
   const flushIntervalMs = 150;
   const minChunkSize = 12;
 
+  let reasoningBuffer = "";
+  let reasoningFull = "";
+  let lastReasoningFlush = Date.now();
+  const reasoningFlushIntervalMs = 200;
+  const reasoningMinChunkSize = 20;
+  const toolCalls: Array<{
+    name: string;
+    args: unknown;
+    result: unknown;
+    createdAt: number;
+  }> = [];
+  const startTime = Date.now();
+
+  const tools = {
+    searchWidgets: {
+      description:
+        "Buscar widgets existentes por titulo ou tipo para evitar duplicatas.",
+      inputSchema: z.object({
+        title: z.string().nullable(),
+        type: z
+          .enum([
+            "task",
+            "person",
+            "event",
+            "note",
+            "goal",
+            "habit",
+            "health",
+          ])
+          .nullable(),
+        limit: z.number().nullable(),
+      }),
+      execute: async (args: {
+        title: string | null;
+        type:
+        | "task"
+        | "person"
+        | "event"
+        | "note"
+        | "goal"
+        | "habit"
+        | "health"
+        | null;
+        limit: number | null;
+      }) => {
+        console.log("[searchWidgets] LLM called with:", JSON.stringify(args));
+        const results = await ctx.runQuery(api.widgets.searchByFlow, {
+          flowNanoId: input.flowNanoId,
+          title: args.title ?? undefined,
+          type: (args.type ?? undefined) as any,
+          limit: args.limit ?? undefined,
+        });
+        const summary = results.map((widget: WidgetSummary) => ({
+          nanoId: widget.nanoId,
+          title: widget.title,
+          titleNormalized: widget.titleNormalized,
+          type: widget.type,
+          fingerprint: widget.fingerprint,
+          data: widget.data,
+        }));
+        console.log("[searchWidgets] Found", summary.length, "widgets");
+        toolCalls.push({
+          name: "searchWidgets",
+          args,
+          result: { count: summary.length },
+          createdAt: Date.now(),
+        });
+        return { widgets: summary };
+      },
+    },
+    upsertWidgets: {
+      description:
+        "Criar ou atualizar widgets e links com deduplicacao baseada em fingerprint.",
+      inputSchema: widgetSchema,
+      execute: async (args: WidgetExtraction) => {
+        console.log("[upsertWidgets] LLM called with:", JSON.stringify({
+          widgetCount: args.widgets.length,
+          widgets: args.widgets.map(w => ({ type: w.type, title: w.title })),
+          linkCount: args.links.length,
+        }));
+        const normalized = normalizeWidgetExtraction(args as WidgetExtraction);
+        const existing = await ctx.runQuery(api.widgets.listByFlow, {
+          flowNanoId: input.flowNanoId,
+        });
+        const plan = resolveWidgetPlan({
+          extracted: normalized.widgets,
+          links: normalized.links,
+          existing,
+          sourceMessageNanoId: input.sourceMessageNanoId,
+        });
+        console.log("[upsertWidgets] Plan:", {
+          upserts: plan.upserts.map(u => ({ type: u.type, title: u.title })),
+          linkCount: plan.linkUpserts.length,
+        });
+        await ctx.runMutation(api.widgets.applyUpsertPlan, {
+          flowId: input.flowId,
+          upserts: plan.upserts,
+          linkUpserts: plan.linkUpserts,
+        });
+        const result = {
+          upserts: plan.upserts.length,
+          links: plan.linkUpserts.length,
+        };
+        console.log("[upsertWidgets] Result:", result);
+        toolCalls.push({
+          name: "upsertWidgets",
+          args,
+          result,
+          createdAt: Date.now(),
+        });
+        return result;
+      },
+    },
+  };
+
+  const existingSummary = formatWidgetSummary(input.existingWidgets);
+  const toolSystemPrompt = `${SYSTEM_PROMPT}
+
+Sempre que o usuario pedir para salvar, lembrar, registrar ou acompanhar algo, chame upsertWidgets.
+Se detectar tarefas, prazos, metas, habitos ou saude implicitos, chame upsertWidgets.
+Se houver duvida ou possivel duplicata, use searchWidgets primeiro.
+
+TIPOS DE WIDGET (ESTRITO - use exatamente estes):
+- task: Qualquer item acionável com prazo ou entrega (ex: "comprar leite", "enviar relatório", "ligar para médico")
+- goal: Objetivos de longo prazo com progresso mensurável (ex: "perder 5kg", "economizar R$10mil")
+- habit: Ações recorrentes a serem acompanhadas (ex: "meditar diariamente", "beber 2L água", "exercitar")
+- health: Medicamentos, suplementos, itens de saúde (ex: "tomar remédio 8h", "vitamina D")
+- event: Compromissos com data/hora definida (ex: "reunião quinta 14h", "consulta médico")
+- person: Pessoas mencionadas na conversa (ex: "Dr. Silva", "mãe", "terapeuta")
+- note: Informações importantes sem ação direta (ex: insight, reflexão, anotação)
+
+REGRAS:
+1. Se é acionável com prazo → Task
+2. Se é recorrente/hábito → Habit  
+3. Se é medicação/suplemento → Health
+4. Se tem data/hora específica → Event
+5. NÃO crie tipos "Insight" - use Note
+6. Use searchWidgets antes de criar duplicatas
+
+CAMPOS ESPECIFICOS:
+- habit: frequency ("daily" | "weekly"), streak (numero)
+- health: dosage (ex: "500mg"), schedule (ex: "8h e 20h"), status ("active" | "paused" | "completed")
+- goal: targetValue, progress (0-100)
+- event: startsAt (timestamp), endsAt, location
+
+AGRUPAMENTO (LISTAS):
+- Quando o usuario listar varias tarefas relacionadas em uma frase, crie UM widget "task" com um titulo de grupo (fornecido pelo usuario ou inferido pelo contexto).
+- Coloque cada tarefa individual em relatedTitles (texto curto e acionavel, com verbo). Ex: titulo "Compras" + relatedTitles ["comprar banana", "comprar maçã"].
+- Para varios itens de medicacao/suplementos, crie UM widget "health" e liste cada item em relatedTitles (inclua horario e dosagem quando houver).
+- Se houver apenas 1 item, relatedTitles pode ser null e use os campos normais.
+- Evite criar varios widgets separados quando houver uma lista clara do usuario.
+
+EXEMPLO DE TODO (FACIL DE PREENCHER):
+- Usuario: "Vou ao mercado e vou comprar uva, banana e maca"
+- Crie 1 widget task:
+  title: "Vou ao mercado"
+  relatedTitles: ["Comprar uva", "Comprar banana", "Comprar maca"]
+
+EDICAO DE TODO:
+- Se o usuario pedir para adicionar itens a um TODO existente, use searchWidgets para achar o widget pelo titulo e atualize o mesmo widget com relatedTitles novos.
+- Preserve relatedTitles atuais e acrescente os novos itens (nao substitua).
+
+
+Evite duplicatas. Resumo de widgets existentes:
+${existingSummary}`;
+
+  let modelReasoning = "";
+
   try {
     const result = await streamText({
-      model: openai("gpt-4o-mini"),
-      system: SYSTEM_PROMPT,
+      model: openai("gpt-5-mini"),
+      system: toolSystemPrompt,
       messages: conversation,
+      tools,
+      toolChoice: "auto",
+      stopWhen: stepCountIs(6),
+      providerOptions: {
+        openai: {
+          reasoningSummary: "auto",
+        },
+      },
       experimental_transform: smoothStream(),
     });
 
-    for await (const chunk of result.textStream) {
-      buffer += chunk;
-      fullText += chunk;
+    for await (const part of result.fullStream) {
+      if (part.type === "reasoning-delta") {
+        modelReasoning += part.text;
+        reasoningBuffer += part.text;
+        reasoningFull += part.text;
+
+        const shouldFlushReasoning =
+          reasoningBuffer.length >= reasoningMinChunkSize ||
+          Date.now() - lastReasoningFlush >= reasoningFlushIntervalMs;
+
+        if (shouldFlushReasoning) {
+          await ctx.runMutation(api.messages.createReasoningChunk, {
+            messageId: input.assistantMessageId,
+            content: reasoningBuffer,
+          });
+          reasoningBuffer = "";
+          lastReasoningFlush = Date.now();
+        }
+        continue;
+      }
+
+      if (part.type !== "text-delta") {
+        continue;
+      }
+
+      buffer += part.text;
+      fullText += part.text;
 
       const shouldFlush =
         buffer.length >= minChunkSize ||
@@ -197,6 +431,10 @@ async function streamAssistantWorker(
         lastFlush = Date.now();
       }
     }
+
+    if (modelReasoning.trim()) {
+      modelReasoning = modelReasoning.trim();
+    }
   } catch (error) {
     console.error("chat.streamAssistantWorker:error", error);
     const fallback =
@@ -210,44 +448,58 @@ async function streamAssistantWorker(
         content: buffer,
       });
     }
+    if (reasoningBuffer.length > 0) {
+      await ctx.runMutation(api.messages.createReasoningChunk, {
+        messageId: input.assistantMessageId,
+        content: reasoningBuffer,
+      });
+    }
   }
 
   const trimmed = fullText.trim();
+  const thinkingMs = Date.now() - startTime;
+  const toolSummary = summarizeToolCalls(toolCalls);
+  const reasoningSummary = mergeReasoningSummary(
+    modelReasoning.trim() || reasoningFull.trim(),
+    toolSummary,
+  );
   await ctx.runMutation(api.messages.updateContent, {
     messageId: input.assistantMessageId,
     content: trimmed,
     isComplete: true,
+    toolCalls,
+    reasoningSummary,
+    thinkingMs,
+    model: "gpt-5-mini",
   });
   return trimmed;
 }
 
-async function runWidgetWorker(
-  content: string,
-  existingWidgets: WidgetSummary[],
-) {
-  const existingSummary = formatWidgetSummary(existingWidgets);
-  const prompt = `Extraia widgets e links do texto do usuario.
-Evite duplicar widgets ja existentes e prefira enriquecer os atuais quando apropriado.
-
-Texto do usuario:
-${content}
-
-Resumo de widgets existentes (titleNormalized | type | campos chave):
-${existingSummary}`;
-
-  const result = await generateObject({
-    model: openai("gpt-5-mini"),
-    schema: widgetSchema,
-    prompt,
-  });
-
-  return normalizeWidgetExtraction(result.object as WidgetExtraction);
-}
-
 function normalizeWidgetExtraction(extraction: WidgetExtraction) {
   const widgets: WidgetInput[] = extraction.widgets.map((widget) => {
-    const person = widget.person || { role: null, contactInfo: null };
-    const event = widget.event || { startsAt: null, endsAt: null, location: null };
+    const person = widget.person || { role: null, contactInfo: null, avatarUrl: null };
+    const event = widget.event || {
+      startsAt: null,
+      endsAt: null,
+      location: null,
+    };
+    const habit = widget.habit || {
+      frequency: null,
+      streak: null,
+    };
+    const health = widget.health || {
+      dosage: null,
+      schedule: null,
+      status: null,
+    };
+    const goal = widget.goal || {
+      targetValue: null,
+      progress: null,
+    };
+
+    const relatedTitles = (widget.relatedTitles ?? [])
+      .map((title) => title.trim())
+      .filter(Boolean);
 
     return {
       type: widget.type,
@@ -257,21 +509,44 @@ function normalizeWidgetExtraction(extraction: WidgetExtraction) {
       priority: widget.priority ?? undefined,
       isCompleted: widget.isCompleted ?? undefined,
       person:
-        person.role || person.contactInfo
+        person.role || person.contactInfo || person.avatarUrl
           ? {
-              role: person.role ?? undefined,
-              contactInfo: person.contactInfo ?? undefined,
-            }
+            role: person.role ?? undefined,
+            contactInfo: person.contactInfo ?? undefined,
+            avatarUrl: person.avatarUrl ?? undefined,
+          }
           : undefined,
       event:
         event.startsAt || event.endsAt || event.location
           ? {
-              startsAt: event.startsAt ?? undefined,
-              endsAt: event.endsAt ?? undefined,
-              location: event.location ?? undefined,
-            }
+            startsAt: event.startsAt ?? undefined,
+            endsAt: event.endsAt ?? undefined,
+            location: event.location ?? undefined,
+          }
           : undefined,
-      relatedTitles: widget.relatedTitles ?? undefined,
+      habit:
+        habit.frequency || habit.streak
+          ? {
+            frequency: habit.frequency ?? undefined,
+            streak: habit.streak ?? undefined,
+          }
+          : undefined,
+      health:
+        health.dosage || health.schedule || health.status
+          ? {
+            dosage: health.dosage ?? undefined,
+            schedule: health.schedule ?? undefined,
+            status: health.status ?? undefined,
+          }
+          : undefined,
+      goal:
+        goal.targetValue || goal.progress
+          ? {
+            targetValue: goal.targetValue ?? undefined,
+            progress: goal.progress ?? undefined,
+          }
+          : undefined,
+      relatedTitles: relatedTitles.length > 0 ? relatedTitles : undefined,
     };
   });
 
@@ -279,6 +554,43 @@ function normalizeWidgetExtraction(extraction: WidgetExtraction) {
     widgets,
     links: extraction.links,
   };
+}
+
+function summarizeToolCalls(
+  toolCalls: Array<{ name: string; result: any; createdAt: number }>,
+) {
+  if (toolCalls.length === 0) {
+    return "Nenhuma ferramenta usada.";
+  }
+
+  const upsert = toolCalls
+    .filter((call) => call.name === "upsertWidgets")
+    .reduce(
+      (acc, call) => {
+        acc.upserts += call.result?.upserts ?? 0;
+        acc.links += call.result?.links ?? 0;
+        return acc;
+      },
+      { upserts: 0, links: 0 },
+    );
+
+  const searches = toolCalls.filter(
+    (call) => call.name === "searchWidgets",
+  ).length;
+  const parts = [];
+  if (searches > 0) parts.push(`Buscas: ${searches}`);
+  if (upsert.upserts > 0)
+    parts.push(`Widgets criados/atualizados: ${upsert.upserts}`);
+  if (upsert.links > 0) parts.push(`Links: ${upsert.links}`);
+  return parts.join(" · ");
+}
+
+function mergeReasoningSummary(modelSummary: string, toolSummary: string) {
+  const sections = [];
+  if (modelSummary) sections.push(modelSummary);
+  if (toolSummary) sections.push(toolSummary);
+  if (sections.length === 0) return "Sem resumo.";
+  return sections.join("\n");
 }
 
 function resolveWidgetPlan(input: {
@@ -497,6 +809,20 @@ function formatWidgetSummary(widgets: WidgetSummary[]) {
         details.push(`eventStart=${data.event.startsAt}`);
       if (data?.event?.location)
         details.push(`eventLocation=${data.event.location}`);
+      if (data?.habit?.frequency)
+        details.push(`habitFreq=${data.habit.frequency}`);
+      if (data?.habit?.streak)
+        details.push(`streak=${data.habit.streak}`);
+      if (data?.health?.dosage)
+        details.push(`dosage=${data.health.dosage}`);
+      if (data?.health?.schedule)
+        details.push(`schedule=${data.health.schedule}`);
+      if (data?.health?.status)
+        details.push(`status=${data.health.status}`);
+      if (data?.goal?.targetValue)
+        details.push(`target=${data.goal.targetValue}`);
+      if (data?.goal?.progress !== undefined)
+        details.push(`progress=${data.goal.progress}%`);
 
       const detailText = details.length ? ` | ${details.join(" ")}` : "";
       return `- ${widget.titleNormalized} | ${widget.type}${detailText}`;

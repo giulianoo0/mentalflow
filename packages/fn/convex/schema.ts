@@ -25,12 +25,32 @@ const schema = defineSchema({
         createdAt: v.number(),
         dedupeKey: v.optional(v.string()),
         isComplete: v.optional(v.boolean()),
+        toolCalls: v.optional(
+            v.array(
+                v.object({
+                    name: v.string(),
+                    args: v.any(),
+                    result: v.any(),
+                    createdAt: v.number(),
+                })
+            )
+        ),
+        reasoningSummary: v.optional(v.string()),
+        thinkingMs: v.optional(v.number()),
+        model: v.optional(v.string()),
     })
         .index("by_flow_createdAt", ["flowId", "createdAt"])
         .index("by_flow_nanoId", ["flowId", "nanoId"])
         .index("by_flow_dedupeKey", ["flowId", "dedupeKey"]),
 
     messageChunks: defineTable({
+        messageId: v.id("messages"),
+        content: v.string(),
+        createdAt: v.optional(v.number()),
+    })
+        .index("by_message", ["messageId", "createdAt"]),
+
+    reasoningChunks: defineTable({
         messageId: v.id("messages"),
         content: v.string(),
         createdAt: v.optional(v.number()),
@@ -44,7 +64,10 @@ const schema = defineSchema({
             v.literal("task"),
             v.literal("person"),
             v.literal("event"),
-            v.literal("note")
+            v.literal("note"),
+            v.literal("goal"),
+            v.literal("habit"),
+            v.literal("health")
         ),
         title: v.string(),
         description: v.optional(v.string()),
@@ -67,8 +90,14 @@ const schema = defineSchema({
         toWidgetId: v.id("widgets"),
         kind: v.union(
             v.literal("mentions"),
-            v.literal("related"),
-            v.literal("depends_on")
+            v.literal("related_to"),
+            v.literal("assigned_to"),
+            v.literal("scheduled_for"),
+            v.literal("depends_on"),
+            v.literal("about"),
+            v.literal("part_of"),
+            v.literal("tracked_by"),
+            v.literal("associated_with")
         ),
         fingerprint: v.string(),
         createdAt: v.number(),

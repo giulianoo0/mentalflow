@@ -13,7 +13,15 @@ import {
   type WidgetUpsert,
 } from "./lib/widget_utils";
 
-const widgetTypeValues: WidgetType[] = ["task", "person", "event", "note"];
+const widgetTypeValues: WidgetType[] = [
+  "task",
+  "person",
+  "event",
+  "note",
+  "goal",
+  "habit",
+  "health",
+];
 
 export const listByFlow = query({
   args: {
@@ -24,6 +32,9 @@ export const listByFlow = query({
         v.literal("person"),
         v.literal("event"),
         v.literal("note"),
+        v.literal("goal"),
+        v.literal("habit"),
+        v.literal("health"),
       ),
     ),
   },
@@ -55,6 +66,38 @@ export const listByFlow = query({
   },
 });
 
+export const updateRelatedTitlesCompletion = mutation({
+  args: {
+    nanoId: v.string(),
+    checked: v.array(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { ok: false };
+
+    const widget = await ctx.db
+      .query("widgets")
+      .withIndex("by_nanoId", (q) => q.eq("nanoId", args.nanoId))
+      .first();
+    if (!widget) return { ok: false };
+
+    const flow = await ctx.db.get(widget.flowId);
+    if (!flow || flow.userId !== userId) return { ok: false };
+
+    const nextData = {
+      ...(widget.data || {}),
+      relatedTitlesCompleted: args.checked,
+    };
+
+    await ctx.db.patch(widget._id, {
+      data: nextData,
+      updatedAt: Date.now(),
+    });
+
+    return { ok: true };
+  },
+});
+
 export const findByFlowAndTitleNormalized = query({
   args: {
     flowNanoId: v.string(),
@@ -79,6 +122,68 @@ export const findByFlowAndTitleNormalized = query({
   },
 });
 
+export const searchByFlow = query({
+  args: {
+    flowNanoId: v.string(),
+    title: v.optional(v.string()),
+    type: v.optional(
+      v.union(
+        v.literal("task"),
+        v.literal("person"),
+        v.literal("event"),
+        v.literal("note"),
+        v.literal("goal"),
+        v.literal("habit"),
+        v.literal("health"),
+      ),
+    ),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const flow = await ctx.db
+      .query("flows")
+      .withIndex("by_nanoId", (q) => q.eq("nanoId", args.flowNanoId))
+      .first();
+    if (!flow || flow.userId !== userId) return [];
+
+    const limit = args.limit ?? 20;
+    const title = args.title?.trim().toLowerCase();
+    const widgetType = args.type;
+
+    if (title) {
+      const normalized = normalizeTitle(title);
+      const exact = await ctx.db
+        .query("widgets")
+        .withIndex("by_flow_titleNormalized", (q) =>
+          q.eq("flowId", flow._id).eq("titleNormalized", normalized),
+        )
+        .collect();
+      if (exact.length > 0) return exact.slice(0, limit);
+    }
+
+    let results = await ctx.db
+      .query("widgets")
+      .withIndex("by_flow", (q) => q.eq("flowId", flow._id))
+      .order("desc")
+      .take(limit);
+
+    if (widgetType) {
+      results = results.filter((widget) => widget.type === widgetType);
+    }
+
+    if (title) {
+      results = results.filter((widget) =>
+        widget.titleNormalized.includes(normalizeTitle(title)),
+      );
+    }
+
+    return results.slice(0, limit);
+  },
+});
+
 export const applyUpsertPlan = mutation({
   args: {
     flowId: v.id("flows"),
@@ -89,6 +194,9 @@ export const applyUpsertPlan = mutation({
           v.literal("person"),
           v.literal("event"),
           v.literal("note"),
+          v.literal("goal"),
+          v.literal("habit"),
+          v.literal("health"),
         ),
         title: v.string(),
         description: v.optional(v.string()),
@@ -105,8 +213,14 @@ export const applyUpsertPlan = mutation({
         toFingerprint: v.string(),
         kind: v.union(
           v.literal("mentions"),
-          v.literal("related"),
+          v.literal("related_to"),
+          v.literal("assigned_to"),
+          v.literal("scheduled_for"),
           v.literal("depends_on"),
+          v.literal("about"),
+          v.literal("part_of"),
+          v.literal("tracked_by"),
+          v.literal("associated_with"),
         ),
         fingerprint: v.string(),
       }),
@@ -138,6 +252,9 @@ export const applyUpsertPlan = mutation({
         isCompleted: upsert.data?.isCompleted as boolean | undefined,
         person: upsert.data?.person as WidgetInput["person"],
         event: upsert.data?.event as WidgetInput["event"],
+        habit: upsert.data?.habit as WidgetInput["habit"],
+        health: upsert.data?.health as WidgetInput["health"],
+        goal: upsert.data?.goal as WidgetInput["goal"],
         relatedTitles: upsert.data?.relatedTitles as string[] | undefined,
       };
 
@@ -303,6 +420,21 @@ function mergeData(
       existingValue === ""
     ) {
       merged[key] = value;
+      continue;
+    }
+
+    if (
+      key === "relatedTitles" &&
+      Array.isArray(existingValue) &&
+      Array.isArray(value)
+    ) {
+      const combined = [...existingValue];
+      for (const item of value) {
+        if (!combined.includes(item)) {
+          combined.push(item);
+        }
+      }
+      merged[key] = combined;
       continue;
     }
 
