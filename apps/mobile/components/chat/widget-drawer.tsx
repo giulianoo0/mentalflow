@@ -12,6 +12,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { Canvas, Path, Skia } from "@shopify/react-native-skia";
 import { useMutation, useQuery } from "convex/react";
+import Animated, { Layout } from "react-native-reanimated";
 import { api } from "../../../../packages/fn/convex/_generated/api";
 
 const { width: screenWidth } = Dimensions.get("window");
@@ -35,6 +36,7 @@ interface Widget {
   type: WidgetType;
   title: string;
   description?: string;
+  createdAt?: number;
   data: {
     dueDate?: number;
     priority?: "high" | "medium" | "low";
@@ -47,9 +49,15 @@ interface Widget {
       schedule?: string;
       status?: "active" | "paused" | "completed";
     };
-    goal?: { targetValue?: number; progress?: number };
+    goal?: {
+      targetValue?: number;
+      progress?: number;
+      startValue?: number;
+      log?: Record<string, number>;
+    };
     relatedTitles?: string[];
     relatedTitlesCompleted?: boolean[];
+    habitLog?: Record<string, boolean[]>;
   };
 }
 
@@ -57,6 +65,11 @@ interface WidgetDrawerProps {
   flowNanoId: string | undefined;
   onClose?: () => void;
 }
+
+type RenderItem =
+  | { kind: "widget"; widget: Widget }
+  | { kind: "habitSummary"; habits: Widget[] }
+  | { kind: "goalSummary"; goals: Widget[] };
 
 export function WidgetDrawer({ flowNanoId, onClose }: WidgetDrawerProps) {
   console.log("[WidgetDrawer] Render with flowNanoId:", flowNanoId);
@@ -80,9 +93,13 @@ export function WidgetDrawer({ flowNanoId, onClose }: WidgetDrawerProps) {
     () => widgetCards.filter((widget) => widget.type !== "event"),
     [widgetCards],
   );
-  const widgetLayout = React.useMemo(
-    () => computeWidgetLayout(nonEventWidgets),
+  const renderItems = React.useMemo(
+    () => buildRenderItems(nonEventWidgets),
     [nonEventWidgets],
+  );
+  const widgetLayout = React.useMemo(
+    () => computeWidgetLayout(renderItems),
+    [renderItems],
   );
 
   return (
@@ -100,7 +117,32 @@ export function WidgetDrawer({ flowNanoId, onClose }: WidgetDrawerProps) {
       >
         {events.length > 0 && <EventSummaryCard events={events} />}
         <View style={styles.grid}>
-          {nonEventWidgets.map((widget) => {
+          {renderItems.map((item) => {
+            if (item.kind === "habitSummary") {
+              const layout = widgetLayout.get("__habit_summary__");
+              return (
+                <HabitSummaryCard
+                  key="habit-summary"
+                  habits={item.habits}
+                  flexBasis={layout?.flexBasis ?? compactMinWidth}
+                  isExpanded={layout?.isExpanded ?? false}
+                />
+              );
+            }
+
+            if (item.kind === "goalSummary") {
+              const layout = widgetLayout.get("__goal_summary__");
+              return (
+                <GoalSummaryCard
+                  key="goal-summary"
+                  goals={item.goals}
+                  flexBasis={layout?.flexBasis ?? compactMinWidth}
+                  isExpanded={layout?.isExpanded ?? false}
+                />
+              );
+            }
+
+            const widget = item.widget;
             const layout = widgetLayout.get(widget.nanoId);
             return (
               <WidgetCard
@@ -113,7 +155,7 @@ export function WidgetDrawer({ flowNanoId, onClose }: WidgetDrawerProps) {
           })}
         </View>
 
-        {nonEventWidgets.length === 0 && events.length === 0 && (
+        {renderItems.length === 0 && events.length === 0 && (
           <View style={styles.emptyState}>
             <Text style={styles.emptyTitle}>Sem widgets ainda</Text>
             <Text style={styles.emptySubtitle}>
@@ -126,23 +168,37 @@ export function WidgetDrawer({ flowNanoId, onClose }: WidgetDrawerProps) {
   );
 }
 
-function computeWidgetLayout(widgets: Widget[]) {
+function computeWidgetLayout(items: RenderItem[]) {
   const layout = new Map<string, { isExpanded: boolean; flexBasis: number }>();
   const minWidths = new Map<string, number>();
 
-  for (const widget of widgets) {
-    minWidths.set(widget.nanoId, getWidgetMinWidth(widget));
+  for (const item of items) {
+    if (item.kind === "habitSummary") {
+      minWidths.set("__habit_summary__", getHabitSummaryMinWidth(item.habits));
+      continue;
+    }
+    if (item.kind === "goalSummary") {
+      minWidths.set("__goal_summary__", getGoalSummaryMinWidth(item.goals));
+      continue;
+    }
+    minWidths.set(item.widget.nanoId, getWidgetMinWidth(item.widget));
   }
 
-  let row: Widget[] = [];
+  let row: RenderItem[] = [];
   let rowWidth = 0;
 
   const finalizeRow = () => {
     if (row.length === 0) return;
     const isExpanded = row.length === 1;
-    for (const widget of row) {
-      const minWidth = minWidths.get(widget.nanoId) ?? compactMinWidth;
-      layout.set(widget.nanoId, {
+    for (const item of row) {
+      const key =
+        item.kind === "habitSummary"
+          ? "__habit_summary__"
+          : item.kind === "goalSummary"
+            ? "__goal_summary__"
+            : item.widget.nanoId;
+      const minWidth = minWidths.get(key) ?? compactMinWidth;
+      layout.set(key, {
         isExpanded,
         flexBasis: isExpanded ? contentWidth : minWidth,
       });
@@ -151,15 +207,21 @@ function computeWidgetLayout(widgets: Widget[]) {
     rowWidth = 0;
   };
 
-  for (const widget of widgets) {
-    const minWidth = minWidths.get(widget.nanoId) ?? compactMinWidth;
+  for (const item of items) {
+    const key =
+      item.kind === "habitSummary"
+        ? "__habit_summary__"
+        : item.kind === "goalSummary"
+          ? "__goal_summary__"
+          : item.widget.nanoId;
+    const minWidth = minWidths.get(key) ?? compactMinWidth;
     const needed = row.length === 0 ? minWidth : minWidth + cardGap;
     if (rowWidth + needed <= contentWidth) {
-      row.push(widget);
+      row.push(item);
       rowWidth += needed;
     } else {
       finalizeRow();
-      row.push(widget);
+      row.push(item);
       rowWidth = minWidth;
     }
   }
@@ -192,6 +254,60 @@ function getWidgetMinWidth(widget: Widget) {
   return isWideCard ? wideMinWidth : compactMinWidth;
 }
 
+function getHabitSummaryMinWidth(habits: Widget[]) {
+  if (habits.length === 0) return compactMinWidth;
+  const totalItems = habits.reduce((acc, habit) => {
+    const data = habit.data || {};
+    const related = Array.isArray(data.relatedTitles)
+      ? data.relatedTitles.length
+      : habit.description?.trim()
+        ? 1
+        : 1;
+    return acc + related;
+  }, 0);
+  return totalItems >= 4 ? wideMinWidth : compactMinWidth;
+}
+
+function getGoalSummaryMinWidth(goals: Widget[]) {
+  if (goals.length === 0) return compactMinWidth;
+  return goals.length >= 2 ? wideMinWidth : compactMinWidth;
+}
+
+function buildRenderItems(widgets: Widget[]): RenderItem[] {
+  const habits = widgets.filter((widget) => widget.type === "habit");
+  const goals = widgets.filter((widget) => widget.type === "goal");
+  const items: RenderItem[] = [];
+  let insertedHabits = false;
+  let insertedGoals = false;
+
+  for (const widget of widgets) {
+    if (widget.type === "habit") {
+      if (!insertedHabits) {
+        items.push({ kind: "habitSummary", habits });
+        insertedHabits = true;
+      }
+      continue;
+    }
+    if (widget.type === "goal") {
+      if (!insertedGoals) {
+        items.push({ kind: "goalSummary", goals });
+        insertedGoals = true;
+      }
+      continue;
+    }
+    items.push({ kind: "widget", widget });
+  }
+
+  if (!insertedHabits && habits.length > 0) {
+    items.push({ kind: "habitSummary", habits });
+  }
+  if (!insertedGoals && goals.length > 0) {
+    items.push({ kind: "goalSummary", goals });
+  }
+
+  return items;
+}
+
 function WidgetCard({
   widget,
   flexBasis,
@@ -204,6 +320,7 @@ function WidgetCard({
   const updateChecklist = useMutation(
     api.widgets.updateRelatedTitlesCompletion,
   );
+  const updateHabitLog = useMutation(api.widgets.updateHabitLog);
   const data = widget.data || {};
   const isTask = widget.type === "task";
   const isGoal = widget.type === "goal";
@@ -236,28 +353,69 @@ function WidgetCard({
     }
     return [];
   }, [isTask, relatedTitles, widget.description]);
+  const habitItems = React.useMemo(() => {
+    if (!isHabit) return [];
+    if (relatedTitles.length > 0) return relatedTitles;
+    if (widget.description) {
+      const cleaned = widget.description.trim();
+      return cleaned ? [cleaned] : [];
+    }
+    return [];
+  }, [isHabit, relatedTitles, widget.description]);
   const hasHealthChecklist = isHealth && relatedTitles.length > 0;
   const hasTodoList = isTask && todoItems.length > 0;
+  const hasHabitList = isHabit && habitItems.length > 0;
   const checklistItems = hasHealthChecklist
     ? relatedTitles
     : hasTodoList
       ? todoItems
-      : [];
+      : hasHabitList
+        ? habitItems
+        : [];
   const hasChecklist = checklistItems.length > 0;
+  const [todayKey, setTodayKey] = React.useState(() => formatDateKey(new Date()));
+  const habitLog =
+    (data.habitLog && typeof data.habitLog === "object" ? data.habitLog : {}) as
+      | Record<string, boolean[]>
+      | undefined;
+  const habitToday = habitLog?.[todayKey];
+
   const initialChecked = React.useMemo(() => {
     if (!hasChecklist) return [] as boolean[];
-    const saved = Array.isArray(data.relatedTitlesCompleted)
-      ? data.relatedTitlesCompleted
-      : [];
+    const saved = isHabit
+      ? Array.isArray(habitToday)
+        ? habitToday
+        : []
+      : Array.isArray(data.relatedTitlesCompleted)
+        ? data.relatedTitlesCompleted
+        : [];
     if (saved.length === checklistItems.length) return saved;
     return checklistItems.map(() => false);
-  }, [checklistItems, data.relatedTitlesCompleted, hasChecklist]);
+  }, [checklistItems, data.relatedTitlesCompleted, habitToday, hasChecklist, isHabit]);
   const [checkedItems, setCheckedItems] =
     React.useState<boolean[]>(initialChecked);
   const checklistSignature = React.useMemo(
-    () => `${widget.nanoId}:${checklistItems.join("|")}`,
-    [widget.nanoId, checklistItems],
+    () => `${widget.nanoId}:${checklistItems.join("|")}:${todayKey}`,
+    [widget.nanoId, checklistItems, todayKey],
   );
+
+  React.useEffect(() => {
+    const now = new Date();
+    const nextMidnight = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() + 1,
+      0,
+      0,
+      0,
+      0,
+    );
+    const timeoutMs = nextMidnight.getTime() - now.getTime();
+    const timer = setTimeout(() => {
+      setTodayKey(formatDateKey(new Date()));
+    }, timeoutMs);
+    return () => clearTimeout(timer);
+  }, [todayKey]);
 
   React.useEffect(() => {
     if (!hasChecklist) return;
@@ -277,10 +435,13 @@ function WidgetCard({
   const cardFlexBasis = flexBasis;
 
   const shouldShowDescription =
-    !!widget.description && !isTask && !(isHealth && hasHealthChecklist);
+    !!widget.description && !isTask && !isHabit && !(isHealth && hasHealthChecklist);
 
   return (
-    <View style={[styles.card, { flexBasis: cardFlexBasis, flexGrow: 1 }]}>
+    <Animated.View
+      layout={Layout.springify()}
+      style={[styles.card, { flexBasis: cardFlexBasis, flexGrow: 1 }]}
+    >
       {isHealth && hasHealthChecklist ? (
         <View style={styles.healthHeader}>
           <View style={styles.healthHeaderText}>
@@ -297,13 +458,19 @@ function WidgetCard({
             trackColor="#E6F3FF"
           />
         </View>
-      ) : isTask ? (
+      ) : isTask || isHabit ? (
         <View style={styles.todoHeader}>
           <Text style={styles.cardTitle}>{widget.title}</Text>
           {isExpanded && hasChecklist && (
-            <Text style={styles.todoCounter}>
-              {completedItems}/{totalItems} Concluidas
-            </Text>
+            isHabit ? (
+              <Text style={styles.todoCounter}>
+                {String(pendingItems).padStart(2, "0")} Pendentes
+              </Text>
+            ) : (
+              <Text style={styles.todoCounter}>
+                {completedItems}/{totalItems} Concluidas
+              </Text>
+            )
           )}
         </View>
       ) : (
@@ -363,6 +530,59 @@ function WidgetCard({
         </View>
       )}
 
+      {isHabit && hasHabitList && (
+        <View style={styles.habitChecklist}>
+          <View style={styles.habitChecklistList}>
+            {habitItems.map((item, index) => {
+              const isChecked = checkedItems[index];
+              return (
+                <Pressable
+                  key={`${widget.nanoId}-habit-${index}`}
+                  style={styles.habitRowItem}
+                  onPress={() => {
+                    const next = checkedItems.map((value, itemIndex) =>
+                      itemIndex === index ? !value : value,
+                    );
+                    setCheckedItems(next);
+                    void updateHabitLog({
+                      nanoId: widget.nanoId,
+                      dateKey: todayKey,
+                      checked: next,
+                    });
+                  }}
+                >
+                  <View
+                    style={[
+                      styles.habitCircle,
+                      isChecked && styles.habitCircleChecked,
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.habitTextItem,
+                      isChecked && styles.habitTextChecked,
+                    ]}
+                  >
+                    {item}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          {isExpanded && hasChecklist && (
+            <View style={styles.habitProgress}>
+              <ProgressRing
+                progress={progressPercent}
+                size={78}
+                strokeWidth={7}
+                color="#6BEF8D"
+                trackColor="#E6F8EC"
+              />
+            </View>
+          )}
+        </View>
+      )}
+
       {/* Todo list */}
       {isTask && !hasTodoList && (
         <Text style={styles.todoEmpty}>Sem tarefas listadas.</Text>
@@ -384,24 +604,8 @@ function WidgetCard({
         </View>
       )}
 
-      {/* Habit display with streak */}
-      {isHabit && (
-        <View style={styles.habitMeta}>
-          {data.habit?.frequency && (
-            <View style={styles.habitRow}>
-              <Ionicons name="repeat-outline" size={14} color="#A855F7" />
-              <Text style={styles.habitText}>
-                {data.habit.frequency === "daily" ? "Diário" : "Semanal"}
-              </Text>
-            </View>
-          )}
-          {data.habit?.streak !== undefined && (
-            <View style={styles.streakBadge}>
-              <Ionicons name="flame" size={14} color="#FF6B6B" />
-              <Text style={styles.streakText}>{data.habit.streak}</Text>
-            </View>
-          )}
-        </View>
+      {isHabit && !hasHabitList && (
+        <Text style={styles.todoEmpty}>Sem hábitos listados.</Text>
       )}
 
       {/* Health display */}
@@ -527,7 +731,7 @@ function WidgetCard({
       )}
 
       {/* Note has no special fields, just title/description */}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -600,10 +804,283 @@ function EventSummaryCard({ events }: { events: Widget[] }) {
   );
 }
 
+function GoalSummaryCard({
+  goals,
+  flexBasis,
+  isExpanded,
+}: {
+  goals: Widget[];
+  flexBasis: number;
+  isExpanded: boolean;
+}) {
+  const goalItems = React.useMemo(() => {
+    return goals.map((goal) => {
+      const data = goal.data || {};
+      const meta = data.goal || {};
+      const startValue = meta.startValue ?? 0;
+      const log = meta.log || {};
+      const loggedTotal = Object.values(log).reduce((acc, value) =>
+        acc + (typeof value === "number" ? value : 0), 0,
+      );
+      const targetValue = meta.targetValue ?? 0;
+      const rawProgress = targetValue > 0
+        ? Math.round(((startValue + loggedTotal) / targetValue) * 100)
+        : meta.progress ?? 0;
+      const progress = Math.min(100, Math.max(0, rawProgress));
+      return {
+        widget: goal,
+        title: goal.title,
+        subtitle: goal.description,
+        progress,
+        dueLabel: formatGoalDueDate(data.dueDate),
+      };
+    });
+  }, [goals]);
+
+  const columns = React.useMemo(() => {
+    if (!isExpanded || goalItems.length <= 1) {
+      return [goalItems];
+    }
+    const mid = Math.ceil(goalItems.length / 2);
+    return [goalItems.slice(0, mid), goalItems.slice(mid)];
+  }, [goalItems, isExpanded]);
+
+  return (
+    <Animated.View
+      layout={Layout.springify()}
+      style={[styles.card, { flexBasis, flexGrow: 1 }]}
+    >
+      <Text style={styles.goalHeader}>Metas</Text>
+      <View style={styles.goalColumns}>
+        {columns.map((column, columnIndex) => (
+          <View key={`goal-col-${columnIndex}`} style={styles.goalColumn}>
+            {column.map((item) => (
+              <View key={item.widget.nanoId} style={styles.goalItem}>
+                <Text
+                  style={styles.goalTitle}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {item.title}
+                </Text>
+                {item.subtitle ? (
+                  <Text style={styles.goalSubtitle}>{item.subtitle}</Text>
+                ) : null}
+                <View style={styles.goalProgressRow}>
+                  <View style={styles.goalProgressTrack}>
+                    <View
+                      style={[
+                        styles.goalProgressFill,
+                        { width: `${item.progress}%` },
+                      ]}
+                    />
+                  </View>
+                  <Text style={styles.goalPercent}>{item.progress}%</Text>
+                </View>
+                {item.dueLabel ? (
+                  <View style={styles.goalDueRow}>
+                    <Ionicons name="calendar-outline" size={14} color="#7A7A7A" />
+                    <Text style={styles.goalDueText}>{item.dueLabel}</Text>
+                  </View>
+                ) : null}
+              </View>
+            ))}
+          </View>
+        ))}
+      </View>
+    </Animated.View>
+  );
+}
+
+function HabitSummaryCard({
+  habits,
+  flexBasis,
+  isExpanded,
+}: {
+  habits: Widget[];
+  flexBasis: number;
+  isExpanded: boolean;
+}) {
+  const updateHabitLog = useMutation(api.widgets.updateHabitLog);
+  const [todayKey, setTodayKey] = React.useState(() => formatDateKey(new Date()));
+
+  React.useEffect(() => {
+    const now = new Date();
+    const nextMidnight = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() + 1,
+      0,
+      0,
+      0,
+      0,
+    );
+    const timeoutMs = nextMidnight.getTime() - now.getTime();
+    const timer = setTimeout(() => {
+      setTodayKey(formatDateKey(new Date()));
+    }, timeoutMs);
+    return () => clearTimeout(timer);
+  }, [todayKey]);
+
+  const habitGroups = React.useMemo(() => {
+    return habits.map((habit) => {
+      const data = habit.data || {};
+      const related = Array.isArray(data.relatedTitles)
+        ? data.relatedTitles.map((title) => title.trim()).filter(Boolean)
+        : [];
+      const items = related.length
+        ? related
+        : habit.description?.trim()
+          ? [habit.description.trim()]
+          : habit.title
+            ? [habit.title]
+            : [];
+      return { habit, items };
+    });
+  }, [habits]);
+
+  const initialChecked = React.useMemo(() => {
+    const next: Record<string, boolean[]> = {};
+    for (const group of habitGroups) {
+      const data = group.habit.data || {};
+      const habitLog =
+        (data.habitLog && typeof data.habitLog === "object"
+          ? data.habitLog
+          : {}) as Record<string, boolean[]>;
+      const saved = habitLog?.[todayKey] ?? data.relatedTitlesCompleted ?? [];
+      next[group.habit.nanoId] = group.items.map((_, index) =>
+        Boolean(saved[index]),
+      );
+    }
+    return next;
+  }, [habitGroups, todayKey]);
+
+  const [checkedByHabit, setCheckedByHabit] = React.useState(initialChecked);
+
+  React.useEffect(() => {
+    setCheckedByHabit(initialChecked);
+  }, [initialChecked]);
+
+  const flattenedItems = React.useMemo(() => {
+    return habitGroups.flatMap((group) =>
+      group.items.map((label, index) => ({
+        habit: group.habit,
+        label,
+        index,
+        createdAt: group.habit.createdAt ?? 0,
+        id: `${group.habit.nanoId}:${label}:${index}`,
+      })),
+    );
+  }, [habitGroups]);
+
+  const orderedItems = React.useMemo(() => {
+    return [...flattenedItems].sort((a, b) => {
+      const aChecked = checkedByHabit[a.habit.nanoId]?.[a.index] ?? false;
+      const bChecked = checkedByHabit[b.habit.nanoId]?.[b.index] ?? false;
+      if (aChecked !== bChecked) return aChecked ? 1 : -1;
+      if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+      const labelCompare = a.label.localeCompare(b.label, "pt-BR");
+      if (labelCompare !== 0) return labelCompare;
+      return a.index - b.index;
+    });
+  }, [flattenedItems, checkedByHabit]);
+
+  const totalItems = flattenedItems.length;
+  const completedItems = flattenedItems.filter((item) =>
+    checkedByHabit[item.habit.nanoId]?.[item.index],
+  ).length;
+  const pendingItems = totalItems - completedItems;
+  const progressPercent = totalItems > 0
+    ? Math.round((completedItems / totalItems) * 100)
+    : 0;
+
+  return (
+    <Animated.View
+      layout={Layout.springify()}
+      style={[styles.card, { flexBasis, flexGrow: 1 }]}
+    >
+      <View style={styles.todoHeader}>
+        <Text style={styles.cardTitle}>Habitos e rotina</Text>
+        {isExpanded && totalItems > 0 && (
+          <Text style={styles.todoCounter}>
+            {String(pendingItems).padStart(2, "0")} Pendentes
+          </Text>
+        )}
+      </View>
+
+      <View style={styles.habitChecklist}>
+        <View style={styles.habitChecklistList}>
+          {orderedItems.map((item) => {
+            const isChecked =
+              checkedByHabit[item.habit.nanoId]?.[item.index] ?? false;
+            return (
+              <Animated.View key={item.id} layout={Layout.springify()}>
+                <Pressable
+                  style={styles.habitRowItem}
+                  onPress={() => {
+                    const current = checkedByHabit[item.habit.nanoId] || [];
+                    const next = current.map((value, idx) =>
+                      idx === item.index ? !value : value,
+                    );
+                    const nextByHabit = {
+                      ...checkedByHabit,
+                      [item.habit.nanoId]: next,
+                    };
+                    setCheckedByHabit(nextByHabit);
+                    void updateHabitLog({
+                      nanoId: item.habit.nanoId,
+                      dateKey: todayKey,
+                      checked: next,
+                    });
+                  }}
+                >
+                  <View
+                    style={[
+                      styles.habitCircle,
+                      isChecked && styles.habitCircleChecked,
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.habitTextItem,
+                      isChecked && styles.habitTextChecked,
+                    ]}
+                  >
+                    {item.label}
+                  </Text>
+                </Pressable>
+              </Animated.View>
+            );
+          })}
+        </View>
+
+        {isExpanded && totalItems > 0 && (
+          <View style={styles.habitProgress}>
+            <ProgressRing
+              progress={progressPercent}
+              size={78}
+              strokeWidth={7}
+              color="#6BEF8D"
+              trackColor="#E6F8EC"
+            />
+          </View>
+        )}
+      </View>
+    </Animated.View>
+  );
+}
+
 function formatDateTime(value?: number) {
   if (!value) return "Sem data";
   const date = new Date(value);
   return `${date.getDate()}/${date.getMonth() + 1} ${date.getHours()}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function formatDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function formatEventMeta(value?: number) {
@@ -619,6 +1096,15 @@ function formatEventMeta(value?: number) {
     minute: "2-digit",
   });
   return `${weekday} (${day}/${month}) ${time}`;
+}
+
+function formatGoalDueDate(value?: number) {
+  if (!value) return null;
+  const date = new Date(value);
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = date.toLocaleDateString("pt-BR", { month: "short" });
+  const year = String(date.getFullYear()).slice(-2);
+  return `Prazo ${day} ${month}/${year}`;
 }
 
 function ProgressRing({
@@ -774,6 +1260,65 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#1B1B1D",
   },
+  goalHeader: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1B1B1D",
+    marginBottom: 12,
+  },
+  goalColumns: {
+    flexDirection: "row",
+    gap: 14,
+  },
+  goalColumn: {
+    flex: 1,
+    gap: 12,
+  },
+  goalItem: {
+    gap: 6,
+  },
+  goalTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#1B1B1D",
+  },
+  goalSubtitle: {
+    fontSize: 12,
+    color: "#7A7A7A",
+  },
+  goalProgressRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  goalProgressTrack: {
+    flex: 1,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "#FCEDED",
+    overflow: "hidden",
+  },
+  goalProgressFill: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "#FF6B6B",
+  },
+  goalPercent: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#FF6B6B",
+    minWidth: 32,
+    textAlign: "right",
+  },
+  goalDueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  goalDueText: {
+    fontSize: 12,
+    color: "#7A7A7A",
+  },
   eventSummaryCard: {
     backgroundColor: "#FFFFFF",
     borderRadius: 28,
@@ -889,6 +1434,48 @@ const styles = StyleSheet.create({
   checklistTextChecked: {
     color: "#9C9C9C",
     textDecorationLine: "line-through",
+  },
+  habitChecklist: {
+    marginTop: 12,
+    flexDirection: "row",
+    gap: 16,
+    alignItems: "flex-start",
+  },
+  habitChecklistList: {
+    flex: 1,
+    gap: 12,
+  },
+  habitRowItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  habitCircle: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1.5,
+    borderColor: "#58E27A",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "transparent",
+  },
+  habitCircleChecked: {
+    backgroundColor: "#58E27A",
+    borderColor: "#58E27A",
+  },
+  habitTextItem: {
+    fontSize: 13,
+    color: "#2E2E2E",
+    flex: 1,
+  },
+  habitTextChecked: {
+    color: "#9C9C9C",
+    textDecorationLine: "line-through",
+  },
+  habitProgress: {
+    alignItems: "center",
+    justifyContent: "center",
   },
   todoEmpty: {
     marginTop: 12,

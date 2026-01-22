@@ -372,7 +372,8 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                             `${getDateContext()} ` +
                             'Sempre que o usuário pedir para salvar, lembrar, registrar ou acompanhar tarefas, eventos, metas, hábitos, saúde ou notas, use as ferramentas. ' +
                             'IMPORTANTE: Em listas de tarefas (ex: compras), crie UM widget task com title de grupo e relatedTitles como checklist. Nao crie varios widgets para cada item. Nao crie notes para itens individuais; tudo vai no checklist. ' +
-                            'Quando o usuario mencionar data/hora em linguagem natural, use parseDateTimeTool para converter para timestamp em ms antes de preencher startsAt/endsAt/dueDate. ' +
+                            'Para metas, use goal.targetValue, goal.startValue e goal.log (registro diario {"YYYY-MM-DD": numero}) e atualize goal.progress conforme o total. ' +
+                            'Quando o usuario mencionar data/hora, gere ISO 8601 em UTC (ex: "2026-01-22T15:40:27.438Z") para preencher startsAt/endsAt/dueDate. O servidor converte para unix ms. ' +
                             'Use searchWidgetsTool para encontrar itens existentes e evitar duplicatas; use upsertWidgetsTool para criar ou atualizar widgets e links. ' +
                             'Se houver dúvida sobre duplicatas, faça uma busca primeiro.',
                         tools: [
@@ -427,7 +428,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                                                     },
                                                     title: { type: 'string' },
                                                     description: { type: 'string', nullable: true },
-                                                    dueDate: { type: 'number', nullable: true },
+                                        dueDate: { type: 'string', nullable: true },
                                                     priority: { type: 'string', enum: ['high', 'medium', 'low'], nullable: true },
                                                     isCompleted: { type: 'boolean', nullable: true },
                                                     person: {
@@ -443,8 +444,8 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                                                         type: 'object',
                                                         nullable: true,
                                                         properties: {
-                                                            startsAt: { type: 'number', nullable: true },
-                                                            endsAt: { type: 'number', nullable: true },
+                                                            startsAt: { type: 'string', nullable: true },
+                                                            endsAt: { type: 'string', nullable: true },
                                                             location: { type: 'string', nullable: true },
                                                         },
                                                     },
@@ -471,6 +472,12 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                                                         properties: {
                                                             targetValue: { type: 'number', nullable: true },
                                                             progress: { type: 'number', nullable: true },
+                                                            startValue: { type: 'number', nullable: true },
+                                                            log: {
+                                                                type: 'object',
+                                                                nullable: true,
+                                                                additionalProperties: { type: 'number' },
+                                                            },
                                                         },
                                                     },
                                                     relatedTitles: {
