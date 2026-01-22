@@ -14,9 +14,9 @@ import {
     useAudioRecorderState,
     RecordingPresets,
 } from 'expo-audio';
-import { useMutation } from 'convex/react';
-import { useAuthToken } from "@convex-dev/auth/react";
+import { useAction, useMutation } from 'convex/react';
 import { api } from '../../../packages/fn/convex/_generated/api';
+import { parseDateTimePt } from '../../../packages/utils';
 
 export type VoiceSessionStatus =
     | 'idle'
@@ -39,6 +39,18 @@ interface UseVoiceSessionOptions {
     onTranscription?: (transcription: Transcription) => void;
     onStatusChange?: (status: VoiceSessionStatus) => void;
     onError?: (error: Error) => void;
+}
+
+interface WidgetToolSearchArgs {
+    title?: string;
+    type?: 'task' | 'person' | 'event' | 'note' | 'goal' | 'habit' | 'health';
+    limit?: number;
+}
+
+interface WidgetToolUpsertArgs {
+    widgets: unknown;
+    links: unknown;
+    sourceMessageNanoId?: string;
 }
 
 export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
@@ -72,10 +84,12 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
         }
     }, [recorderState.metering, recorderState.isRecording, status, isSpeaking]);
 
-    const token = useAuthToken();
     const insertMessage = useMutation((api as any).messages.insert);
     const createPendingMessage = useMutation((api as any).messages.createPending);
     const updateMessageContent = useMutation((api as any).messages.updateContent);
+    const searchWidgetsToolAction = useAction((api as any).chat.searchWidgetsTool);
+    const upsertWidgetsToolAction = useAction((api as any).chat.upsertWidgetsTool);
+    const createRealtimeSessionTokenAction = useAction((api as any).voice.createRealtimeSessionToken);
 
     const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
     const dataChannelRef = useRef<any>(null);
@@ -94,10 +108,6 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
         setStatus(newStatus);
         onStatusChange?.(newStatus);
     }, [onStatusChange]);
-
-    const getApiUrl = () => {
-        return process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
-    };
 
     const cleanup = useCallback(() => {
         isAbortedRef.current = true;
@@ -138,7 +148,43 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
         } catch (e) { }
     }, [recorder, recorderState.isRecording]);
 
-    const handleRealtimeEvent = useCallback((event: any) => {
+    const getDateContext = () => {
+        const now = new Date();
+        const date = now.toLocaleDateString('pt-BR');
+        const time = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        const weekday = now.toLocaleDateString('pt-BR', { weekday: 'long' });
+        return `Hoje é ${weekday}, ${date}, e agora são ${time} (horário local).`;
+    };
+
+    const executeToolCall = useCallback(async (name: string, args: any) => {
+        switch (name) {
+            case 'searchWidgetsTool':
+                if (!flowNanoIdRef.current) throw new Error('Missing flowNanoId');
+                return await searchWidgetsToolAction({
+                    flowNanoId: flowNanoIdRef.current,
+                    title: args?.title,
+                    type: args?.type,
+                    limit: args?.limit,
+                });
+            case 'upsertWidgetsTool':
+                if (!flowNanoIdRef.current) throw new Error('Missing flowNanoId');
+                return await upsertWidgetsToolAction({
+                    flowNanoId: flowNanoIdRef.current,
+                    widgets: args?.widgets,
+                    links: args?.links,
+                    sourceMessageNanoId: args?.sourceMessageNanoId,
+                });
+            case 'parseDateTimeTool':
+                return parseDateTimePt(String(args?.text ?? ''), {
+                    baseDateMs: Date.now(),
+                    timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+                });
+            default:
+                throw new Error(`Unknown tool: ${name}`);
+        }
+    }, [searchWidgetsToolAction, upsertWidgetsToolAction]);
+
+    const handleRealtimeEvent = useCallback(async (event: any) => {
         switch (event.type) {
             case 'conversation.item.input_audio_transcription.completed':
                 const userText = event.transcript?.trim();
@@ -201,6 +247,44 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                 setAiAudioLevel(0);
                 break;
             case 'response.done':
+                if (event.response?.output?.length) {
+                    for (const output of event.response.output) {
+                        if (output.type !== 'function_call') continue;
+                        const callId = output.call_id as string | undefined;
+                        const toolName = output.name as string | undefined;
+                        if (!callId || !toolName) continue;
+
+                        let args: any = {};
+                        try {
+                            args = output.arguments ? JSON.parse(output.arguments) : {};
+                        } catch (err) {
+                            args = {};
+                        }
+
+                        try {
+                            const result = await executeToolCall(toolName, args);
+                            dataChannelRef.current?.send(JSON.stringify({
+                                type: 'conversation.item.create',
+                                item: {
+                                    type: 'function_call_output',
+                                    call_id: callId,
+                                    output: JSON.stringify(result ?? {}),
+                                },
+                            }));
+                            dataChannelRef.current?.send(JSON.stringify({ type: 'response.create' }));
+                        } catch (err) {
+                            dataChannelRef.current?.send(JSON.stringify({
+                                type: 'conversation.item.create',
+                                item: {
+                                    type: 'function_call_output',
+                                    call_id: callId,
+                                    output: JSON.stringify({ error: (err as Error)?.message || 'Tool failed' }),
+                                },
+                            }));
+                            dataChannelRef.current?.send(JSON.stringify({ type: 'response.create' }));
+                        }
+                    }
+                }
                 updateStatus('listening');
                 setAiAudioLevel(0);
                 break;
@@ -209,7 +293,29 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                 onError?.(new Error(event.error?.message || 'Realtime API error'));
                 break;
         }
-    }, [currentTranscript, insertMessage, createPendingMessage, updateMessageContent, onTranscription, updateStatus, onError]);
+    }, [currentTranscript, insertMessage, createPendingMessage, updateMessageContent, onTranscription, updateStatus, onError, executeToolCall]);
+
+    const searchWidgets = useCallback(async (input: WidgetToolSearchArgs) => {
+        const flowNanoIdValue = flowNanoIdRef.current;
+        if (!flowNanoIdValue) throw new Error('Missing flowNanoId');
+        return await searchWidgetsToolAction({
+            flowNanoId: flowNanoIdValue,
+            title: input.title,
+            type: input.type,
+            limit: input.limit,
+        });
+    }, [searchWidgetsToolAction]);
+
+    const upsertWidgets = useCallback(async (input: WidgetToolUpsertArgs) => {
+        const flowNanoIdValue = flowNanoIdRef.current;
+        if (!flowNanoIdValue) throw new Error('Missing flowNanoId');
+        return await upsertWidgetsToolAction({
+            flowNanoId: flowNanoIdValue,
+            widgets: input.widgets,
+            links: input.links,
+            sourceMessageNanoId: input.sourceMessageNanoId,
+        });
+    }, [upsertWidgetsToolAction]);
 
     const startSession = useCallback(async () => {
         if (isConnectingRef.current || (status !== 'idle' && status !== 'disconnected' && status !== 'error')) return;
@@ -234,14 +340,8 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
             }
             if (isAbortedRef.current) return;
 
-            const tokenRes = await fetch(`${getApiUrl()}/realtime/token`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
-            });
-            if (!tokenRes.ok) throw new Error('Failed to get ephemeral token');
-            if (isAbortedRef.current) return;
-
-            const { token: eToken } = await tokenRes.json();
+            const { token: eToken } = await createRealtimeSessionTokenAction({});
+            if (!eToken) throw new Error('Failed to get ephemeral token');
             if (isAbortedRef.current) return;
 
             const stream = await mediaDevices.getUserMedia({ audio: true, video: false });
@@ -263,7 +363,149 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
             dc.onopen = () => {
                 if (isAbortedRef.current) return;
                 updateStatus('connected');
-                dc.send(JSON.stringify({ type: 'session.update', session: { input_audio_transcription: { model: 'whisper-1' } } }));
+                dc.send(JSON.stringify({
+                    type: 'session.update',
+                    session: {
+                        input_audio_transcription: { model: 'whisper-1' },
+                        instructions:
+                            'Você é um assistente empático e acolhedor focado em saúde mental e bem-estar emocional, chamado Mindflow. Responda sempre em Português do Brasil. ' +
+                            `${getDateContext()} ` +
+                            'Sempre que o usuário pedir para salvar, lembrar, registrar ou acompanhar tarefas, eventos, metas, hábitos, saúde ou notas, use as ferramentas. ' +
+                            'IMPORTANTE: Em listas de tarefas (ex: compras), crie UM widget task com title de grupo e relatedTitles como checklist. Nao crie varios widgets para cada item. Nao crie notes para itens individuais; tudo vai no checklist. ' +
+                            'Quando o usuario mencionar data/hora em linguagem natural, use parseDateTimeTool para converter para timestamp em ms antes de preencher startsAt/endsAt/dueDate. ' +
+                            'Use searchWidgetsTool para encontrar itens existentes e evitar duplicatas; use upsertWidgetsTool para criar ou atualizar widgets e links. ' +
+                            'Se houver dúvida sobre duplicatas, faça uma busca primeiro.',
+                        tools: [
+                            {
+                                type: 'function',
+                                name: 'searchWidgetsTool',
+                                description: 'Buscar widgets existentes por título ou tipo para evitar duplicatas.',
+                                parameters: {
+                                    type: 'object',
+                                    properties: {
+                                        title: { type: 'string', nullable: true },
+                                        type: {
+                                            type: 'string',
+                                            enum: ['task', 'person', 'event', 'note', 'goal', 'habit', 'health'],
+                                            nullable: true,
+                                        },
+                                        limit: { type: 'number', nullable: true },
+                                    },
+                                    required: [],
+                                },
+                            },
+                            {
+                                type: 'function',
+                                name: 'parseDateTimeTool',
+                                description: 'Converter data/hora em PT-BR para timestamp (ms) em UTC usando o fuso do usuario.',
+                                parameters: {
+                                    type: 'object',
+                                    properties: {
+                                        text: { type: 'string' },
+                                        baseDateMs: { type: 'number', nullable: true },
+                                        timezoneOffsetMinutes: { type: 'number', nullable: true },
+                                    },
+                                    required: ['text'],
+                                },
+                            },
+                            {
+                                type: 'function',
+                                name: 'upsertWidgetsTool',
+                                description: 'Criar ou atualizar widgets e links com deduplicação por fingerprint.',
+                                parameters: {
+                                    type: 'object',
+                                    properties: {
+                                        widgets: {
+                                            type: 'array',
+                                            minItems: 1,
+                                            items: {
+                                                type: 'object',
+                                                properties: {
+                                                    type: {
+                                                        type: 'string',
+                                                        enum: ['task', 'person', 'event', 'note', 'goal', 'habit', 'health'],
+                                                    },
+                                                    title: { type: 'string' },
+                                                    description: { type: 'string', nullable: true },
+                                                    dueDate: { type: 'number', nullable: true },
+                                                    priority: { type: 'string', enum: ['high', 'medium', 'low'], nullable: true },
+                                                    isCompleted: { type: 'boolean', nullable: true },
+                                                    person: {
+                                                        type: 'object',
+                                                        nullable: true,
+                                                        properties: {
+                                                            role: { type: 'string', nullable: true },
+                                                            contactInfo: { type: 'string', nullable: true },
+                                                            avatarUrl: { type: 'string', nullable: true },
+                                                        },
+                                                    },
+                                                    event: {
+                                                        type: 'object',
+                                                        nullable: true,
+                                                        properties: {
+                                                            startsAt: { type: 'number', nullable: true },
+                                                            endsAt: { type: 'number', nullable: true },
+                                                            location: { type: 'string', nullable: true },
+                                                        },
+                                                    },
+                                                    habit: {
+                                                        type: 'object',
+                                                        nullable: true,
+                                                        properties: {
+                                                            frequency: { type: 'string', enum: ['daily', 'weekly'], nullable: true },
+                                                            streak: { type: 'number', nullable: true },
+                                                        },
+                                                    },
+                                                    health: {
+                                                        type: 'object',
+                                                        nullable: true,
+                                                        properties: {
+                                                            dosage: { type: 'string', nullable: true },
+                                                            schedule: { type: 'string', nullable: true },
+                                                            status: { type: 'string', enum: ['active', 'paused', 'completed'], nullable: true },
+                                                        },
+                                                    },
+                                                    goal: {
+                                                        type: 'object',
+                                                        nullable: true,
+                                                        properties: {
+                                                            targetValue: { type: 'number', nullable: true },
+                                                            progress: { type: 'number', nullable: true },
+                                                        },
+                                                    },
+                                                    relatedTitles: {
+                                                        type: 'array',
+                                                        nullable: true,
+                                                        items: { type: 'string' },
+                                                    },
+                                                },
+                                                required: ['type', 'title'],
+                                            },
+                                        },
+                                        links: {
+                                            type: 'array',
+                                            items: {
+                                                type: 'object',
+                                                properties: {
+                                                    fromTitle: { type: 'string' },
+                                                    toTitle: { type: 'string' },
+                                                    kind: {
+                                                        type: 'string',
+                                                        enum: ['mentions', 'related_to', 'assigned_to', 'scheduled_for', 'depends_on', 'about', 'part_of', 'tracked_by', 'associated_with'],
+                                                    },
+                                                },
+                                                required: ['fromTitle', 'toTitle', 'kind'],
+                                            },
+                                        },
+                                        sourceMessageNanoId: { type: 'string', nullable: true },
+                                    },
+                                    required: ['widgets', 'links'],
+                                },
+                            },
+                        ],
+                        tool_choice: 'auto',
+                    },
+                }));
                 onOpenTimeoutRef.current = setTimeout(async () => {
                     if (isAbortedRef.current) return;
                     updateStatus('listening');
@@ -274,7 +516,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
 
             dc.onmessage = (e: any) => {
                 if (isAbortedRef.current) return;
-                try { handleRealtimeEvent(JSON.parse(e.data)); } catch (err) { }
+                try { void handleRealtimeEvent(JSON.parse(e.data)); } catch (err) { }
             };
 
             dc.onerror = (e: any) => {
@@ -306,7 +548,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                 onError?.(e instanceof Error ? e : new Error('Start failed'));
             }
         }
-    }, [token, recorder, updateStatus, onError, cleanup, handleRealtimeEvent]);
+    }, [createRealtimeSessionTokenAction, recorder, updateStatus, onError, cleanup, handleRealtimeEvent, status]);
 
     const stopSession = useCallback(() => {
         cleanup();
@@ -337,5 +579,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
         startSession,
         stopSession,
         resetSession,
+        searchWidgets,
+        upsertWidgets,
     };
 }
