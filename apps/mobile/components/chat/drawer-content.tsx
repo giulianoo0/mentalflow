@@ -1,15 +1,13 @@
-import React, { useState } from "react";
+import React from "react";
 import {
   View,
   Text,
   StyleSheet,
   Pressable,
-  TextInput,
   Dimensions,
   ScrollView,
 } from "react-native";
 import { DrawerContentComponentProps } from "@react-navigation/drawer";
-import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useRouter } from "expo-router";
 import { useQuery } from "convex/react";
 import { api } from "../../../../packages/fn/convex/_generated/api";
@@ -17,27 +15,26 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { LinearGradient } from "expo-linear-gradient";
-import { LAYOUT } from "../../constants/layout";
+import { useDrawerContext } from "../../app/(chat)/_layout";
 
 const { width: screenWidth } = Dimensions.get("window");
 
-export function ChatDrawerContent(props: DrawerContentComponentProps) {
+export function ChatDrawerContent({
+  navigation,
+  searchText = "",
+}: DrawerContentComponentProps & { searchText?: string }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [searchText, setSearchText] = useState("");
+  const { setActiveFlowNanoId } = useDrawerContext();
 
   const flowsRaw = useQuery((api as any).flows.listByUser);
   const flows = flowsRaw || [];
   const isLoading = flowsRaw === undefined;
 
   const handleFlowPress = (flowNanoId: string) => {
-    router.push({ pathname: "/(chat)", params: { flowId: flowNanoId } });
-    props.navigation.closeDrawer();
-  };
-
-  const handleNewChat = () => {
-    router.push("/(chat)");
-    props.navigation.closeDrawer();
+    setActiveFlowNanoId(flowNanoId);
+    router.replace({ pathname: "/(chat)", params: { flowId: flowNanoId } });
+    navigation.closeDrawer();
   };
 
   const formatTimestamp = (date: number) => {
@@ -48,24 +45,23 @@ export function ChatDrawerContent(props: DrawerContentComponentProps) {
     return `${days} dias`;
   };
 
-  const getStableRandomHeight = (id: string) => {
-    let hash = 0;
-    for (let i = 0; i < id.length; i++) {
-      hash = id.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    // Even larger scale: 180-260
-    return 180 + (Math.abs(hash) % 81);
-  };
+  const normalizedSearch = searchText.trim().toLowerCase();
+  const filteredFlows = normalizedSearch
+    ? flows.filter((flow: any) =>
+      String(flow.title || "Nova Conversa")
+        .toLowerCase()
+        .includes(normalizedSearch),
+    )
+    : flows;
 
-  const leftFlows = flows.filter((_: any, i: number) => i % 2 === 0);
-  const rightFlows = flows.filter((_: any, i: number) => i % 2 !== 0);
+  const leftFlows = filteredFlows.filter((_: any, i: number) => i % 2 === 0);
+  const rightFlows = filteredFlows.filter((_: any, i: number) => i % 2 !== 0);
 
   const renderCard = (item: any, _index: number, _isRightColumn: boolean) => (
     <Pressable
       key={item.nanoId}
       style={({ pressed }) => [
         styles.card,
-        { minHeight: getStableRandomHeight(item.nanoId) },
         pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
       ]}
       onPress={() => handleFlowPress(item.nanoId)}
@@ -131,49 +127,12 @@ export function ChatDrawerContent(props: DrawerContentComponentProps) {
           <View style={{ flex: 1 }} />
           <Pressable
             style={styles.headerIconButton}
-            onPress={() => props.navigation.closeDrawer()}
+            onPress={() => navigation.closeDrawer()}
           >
             <Ionicons name="chevron-forward-outline" size={24} color="#000" />
           </Pressable>
         </View>
       </View>
-
-      <KeyboardStickyView
-        offset={{ closed: 0, opened: 8 }}
-        style={styles.bottomStickyWrapper}
-      >
-        <View
-          style={[
-            styles.bottomContainer,
-            { paddingBottom: Math.max(insets.bottom, 12) },
-          ]}
-        >
-          <LinearGradient
-            colors={["transparent", "rgba(255, 255, 255, 0.8)", "#FFFFFF"]}
-            locations={[0, 0.5, 1]}
-            style={[StyleSheet.absoluteFill, { top: -40 }]} // Start fade slightly above
-          />
-          <View style={styles.bottomRow}>
-            <View style={styles.searchBarWrapper}>
-              <Ionicons name="search-outline" size={24} color="#999" />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Buscar..."
-                placeholderTextColor="#999"
-                value={searchText}
-                onChangeText={setSearchText}
-                returnKeyType="search"
-              />
-            </View>
-
-            <Pressable onPress={handleNewChat} style={styles.newChatIconButton}>
-              <View style={styles.newChatIconContent}>
-                <Ionicons name="add" size={30} color="#FFF" />
-              </View>
-            </Pressable>
-          </View>
-        </View>
-      </KeyboardStickyView>
     </LinearGradient>
   );
 }
@@ -197,9 +156,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   headerIconButton: {
-    width: LAYOUT.BUTTON_SIZE,
-    height: LAYOUT.BUTTON_SIZE,
-    borderRadius: LAYOUT.BUTTON_SIZE / 2,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     backgroundColor: "rgba(255, 255, 255, 1)",
     justifyContent: "center",
     alignItems: "center",
@@ -211,7 +170,7 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: 16,
-    paddingBottom: 160,
+    paddingBottom: 80,
   },
   masonryContainer: {
     flexDirection: "row",
@@ -227,6 +186,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFF",
     borderRadius: 28, // Rounder for extra scale
     padding: 20, // Increased from 16
+    minHeight: 180,
     marginBottom: 16,
     justifyContent: "space-between",
     elevation: 4,
@@ -265,62 +225,5 @@ const styles = StyleSheet.create({
   emptyText: {
     color: "#999",
     fontSize: 14,
-  },
-  bottomStickyWrapper: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
-  },
-  bottomContainer: {
-    paddingHorizontal: 12,
-    paddingTop: 16, // Reduced since LinearGradient handles the fade area
-  },
-  bottomRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    zIndex: 2, // Stay above the gradient background
-  },
-  searchBarWrapper: {
-    flex: 1,
-    height: LAYOUT.INPUT_HEIGHT,
-    backgroundColor: "#FFF",
-    borderRadius: LAYOUT.INPUT_HEIGHT / 2,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    borderWidth: 1,
-    borderColor: "#e0e0e0",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  searchInput: {
-    flex: 1,
-    marginLeft: 8,
-    fontSize: 16, // Slighly bigger text
-    color: "#1A1A1A",
-    height: "100%",
-  },
-  newChatIconButton: {
-    width: LAYOUT.BUTTON_SIZE,
-    height: LAYOUT.BUTTON_SIZE,
-    borderRadius: LAYOUT.BUTTON_SIZE / 2,
-    overflow: "hidden",
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  newChatIconContent: {
-    flex: 1,
-    justifyContent: "center",
-    backgroundColor: "black",
-    alignItems: "center",
   },
 });

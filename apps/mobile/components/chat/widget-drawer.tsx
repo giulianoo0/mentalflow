@@ -12,7 +12,16 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { Canvas, Path, Skia } from "@shopify/react-native-skia";
 import { useMutation, useQuery } from "convex/react";
-import Animated, { Layout } from "react-native-reanimated";
+import Animated, {
+  Layout,
+  useSharedValue,
+  useAnimatedStyle,
+  withRepeat,
+  withTiming,
+  withDelay,
+  Easing,
+  interpolate,
+} from "react-native-reanimated";
 import { api } from "../../../../packages/fn/convex/_generated/api";
 
 const { width: screenWidth } = Dimensions.get("window");
@@ -29,7 +38,8 @@ type WidgetType =
   | "note"
   | "goal"
   | "habit"
-  | "health";
+  | "health"
+  | "water";
 
 interface Widget {
   nanoId: string;
@@ -55,6 +65,12 @@ interface Widget {
       startValue?: number;
       log?: Record<string, number>;
     };
+    water?: {
+      currentAmount?: number;
+      targetAmount?: number;
+      unit?: "l" | "ml";
+      log?: Record<string, number>;
+    };
     relatedTitles?: string[];
     relatedTitlesCompleted?: boolean[];
     habitLog?: Record<string, boolean[]>;
@@ -63,6 +79,7 @@ interface Widget {
 
 interface WidgetDrawerProps {
   flowNanoId: string | undefined;
+  searchText?: string;
   onClose?: () => void;
 }
 
@@ -71,7 +88,11 @@ type RenderItem =
   | { kind: "habitSummary"; habits: Widget[] }
   | { kind: "goalSummary"; goals: Widget[] };
 
-export function WidgetDrawer({ flowNanoId, onClose }: WidgetDrawerProps) {
+export function WidgetDrawer({
+  flowNanoId,
+  searchText = "",
+  onClose,
+}: WidgetDrawerProps) {
   console.log("[WidgetDrawer] Render with flowNanoId:", flowNanoId);
   const insets = useSafeAreaInsets();
   const widgets = useQuery(
@@ -85,13 +106,31 @@ export function WidgetDrawer({ flowNanoId, onClose }: WidgetDrawerProps) {
   );
 
   const widgetCards: Widget[] = widgets || [];
+  const normalizedSearch = searchText.trim().toLowerCase();
+  const matchesWidget = React.useCallback(
+    (widget: Widget) => {
+      if (!normalizedSearch) return true;
+      const haystacks = [
+        widget.title,
+        widget.description,
+        ...(Array.isArray(widget.data?.relatedTitles)
+          ? widget.data.relatedTitles
+          : []),
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+      return haystacks.some((value) => value.includes(normalizedSearch));
+    },
+    [normalizedSearch],
+  );
+
   const events = React.useMemo(
-    () => widgetCards.filter((widget) => widget.type === "event"),
-    [widgetCards],
+    () => widgetCards.filter((widget) => widget.type === "event" && matchesWidget(widget)),
+    [widgetCards, matchesWidget],
   );
   const nonEventWidgets = React.useMemo(
-    () => widgetCards.filter((widget) => widget.type !== "event"),
-    [widgetCards],
+    () => widgetCards.filter((widget) => widget.type !== "event" && matchesWidget(widget)),
+    [widgetCards, matchesWidget],
   );
   const renderItems = React.useMemo(
     () => buildRenderItems(nonEventWidgets),
@@ -329,6 +368,7 @@ function WidgetCard({
   const isEvent = widget.type === "event";
   const isPerson = widget.type === "person";
   const isNote = widget.type === "note";
+  const isWater = widget.type === "water";
 
   const typeColors: Record<WidgetType, string> = {
     task: "#FF6B6B",
@@ -338,6 +378,7 @@ function WidgetCard({
     event: "#3B82F6",
     person: "#F59E0B",
     note: "#6B7280",
+    water: "#0B5FFF",
   };
 
   const relatedTitles = React.useMemo(() => {
@@ -433,6 +474,16 @@ function WidgetCard({
     totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
   const checklistAccent = isHealth ? "#4AA9FF" : typeColors[widget.type];
   const cardFlexBasis = flexBasis;
+
+  if (isWater) {
+    return (
+      <WaterCard
+        widget={widget}
+        flexBasis={cardFlexBasis}
+        isExpanded={isExpanded}
+      />
+    );
+  }
 
   const shouldShowDescription =
     !!widget.description && !isTask && !isHabit && !(isHealth && hasHealthChecklist);
@@ -732,6 +783,218 @@ function WidgetCard({
 
       {/* Note has no special fields, just title/description */}
     </Animated.View>
+  );
+}
+
+function WaterCard({
+  widget,
+  flexBasis,
+  isExpanded,
+}: {
+  widget: Widget;
+  flexBasis: number;
+  isExpanded: boolean;
+}) {
+  const water = widget.data?.water || {};
+  const unit = water.unit === "ml" ? "ml" : "l";
+  const current = typeof water.currentAmount === "number"
+    ? water.currentAmount
+    : 0;
+  const target = typeof water.targetAmount === "number"
+    ? water.targetAmount
+    : 0;
+  const progress = target > 0 ? Math.round((current / target) * 100) : 0;
+  const remaining = Math.max(0, target - current);
+  const unitLabel = unit === "ml" ? "ml" : "l";
+  const displayCurrent = formatWaterAmount(current, unit);
+  const displayTarget = formatWaterAmount(target, unit);
+  const displayRemaining = formatWaterAmount(remaining, unit);
+  const ringSize = isExpanded ? 120 : 64;
+  const ringStroke = isExpanded ? 10 : 8;
+
+  return (
+    <Animated.View
+      layout={Layout.springify()}
+      style={[
+        styles.card,
+        styles.waterCard,
+        isExpanded && styles.waterCardExpanded,
+        { flexBasis, flexGrow: 1 },
+      ]}
+    >
+      <View style={styles.waterBackground} pointerEvents="none">
+        <WaterFuzz />
+        <WaterSparkles isExpanded={isExpanded} />
+      </View>
+      <View style={styles.waterContent}>
+        <View style={styles.waterHeader}>
+          <View style={styles.waterHeaderText}>
+            <Text style={styles.waterTitle}>{widget.title}</Text>
+            <Text
+              style={[
+                styles.waterAmount,
+                isExpanded && styles.waterAmountExpanded,
+              ]}
+            >
+              {displayCurrent}/{displayTarget}
+              {unitLabel}
+            </Text>
+          </View>
+          <ProgressRing
+            progress={progress}
+            size={ringSize}
+            strokeWidth={ringStroke}
+            color="#0B5FFF"
+            trackColor="rgba(255, 255, 255, 0.35)"
+            textColor="#FFFFFF"
+          />
+        </View>
+
+        {isExpanded && (
+          <View style={styles.waterFooter}>
+            <View style={styles.waterStats}>
+              <View style={styles.waterStatItem}>
+                <Text style={styles.waterStatLabel}>Faltam</Text>
+                <Text style={styles.waterStatValue}>
+                  {displayRemaining}
+                  {unitLabel}
+                </Text>
+              </View>
+              <View style={styles.waterStatDivider} />
+              <View style={styles.waterStatItem}>
+                <Text style={styles.waterStatLabel}>Meta diaria</Text>
+                <Text style={styles.waterStatValue}>
+                  {displayTarget}
+                  {unitLabel}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.waterNoteRow}>
+              <Ionicons name="water-outline" size={14} color="#E6EEFF" />
+              <Text style={styles.waterNoteText}>1 copo ~ 250 ml</Text>
+            </View>
+          </View>
+        )}
+      </View>
+    </Animated.View>
+  );
+}
+
+function WaterFuzz() {
+  const drift = useSharedValue(0);
+
+  React.useEffect(() => {
+    drift.value = withRepeat(
+      withTiming(1, { duration: 6200, easing: Easing.inOut(Easing.sin) }),
+      -1,
+      true,
+    );
+  }, []);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(drift.value, [0, 1], [0.18, 0.38]),
+    transform: [
+      { translateY: interpolate(drift.value, [0, 1], [0, -12]) },
+      { scale: interpolate(drift.value, [0, 1], [1, 1.05]) },
+    ],
+  }));
+
+  return <Animated.View style={[styles.waterFuzz, animatedStyle]} />;
+}
+
+function WaterSparkles({ isExpanded }: { isExpanded: boolean }) {
+  const shift = isExpanded ? 80 : 0;
+  const farShift = isExpanded ? 120 : 0;
+
+  return (
+    <View style={styles.waterSparkles} pointerEvents="none">
+      <SparkleDot
+        size={6}
+        top={18}
+        left={18}
+        delay={0}
+        float={isExpanded ? 12 : 8}
+      />
+      <SparkleDot
+        size={4}
+        top={10}
+        left={90 + shift}
+        delay={800}
+        float={isExpanded ? 10 : 6}
+      />
+      <SparkleDot
+        size={5}
+        top={52}
+        left={70 + shift}
+        delay={1400}
+        float={isExpanded ? 14 : 8}
+      />
+      <SparkleDot
+        size={3}
+        top={90}
+        left={70}
+        delay={2200}
+        float={isExpanded ? 10 : 6}
+      />
+      <SparkleDot
+        size={4}
+        top={120}
+        left={110 + farShift}
+        delay={3000}
+        float={isExpanded ? 12 : 7}
+      />
+    </View>
+  );
+}
+
+function SparkleDot({
+  size,
+  top,
+  left,
+  delay,
+  float,
+}: {
+  size: number;
+  top: number;
+  left: number;
+  delay: number;
+  float: number;
+}) {
+  const shimmer = useSharedValue(0);
+
+  React.useEffect(() => {
+    shimmer.value = withDelay(
+      delay,
+      withRepeat(
+        withTiming(1, { duration: 4200, easing: Easing.inOut(Easing.sin) }),
+        -1,
+        true,
+      ),
+    );
+  }, [delay]);
+
+  const sparkleStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(shimmer.value, [0, 1], [0.2, 0.75]),
+    transform: [
+      { translateY: interpolate(shimmer.value, [0, 1], [0, -float]) },
+      { scale: interpolate(shimmer.value, [0, 1], [0.9, 1.15]) },
+    ],
+  }));
+
+  return (
+    <Animated.View
+      style={[
+        styles.waterSparkle,
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          top,
+          left,
+        },
+        sparkleStyle,
+      ]}
+    />
   );
 }
 
@@ -1107,18 +1370,28 @@ function formatGoalDueDate(value?: number) {
   return `Prazo ${day} ${month}/${year}`;
 }
 
+function formatWaterAmount(value: number, unit: "l" | "ml") {
+  if (unit === "ml") {
+    return String(Math.round(value));
+  }
+  const rounded = Math.round(value * 10) / 10;
+  return rounded % 1 === 0 ? String(Math.round(rounded)) : rounded.toFixed(1);
+}
+
 function ProgressRing({
   progress,
   size,
   strokeWidth,
   color,
   trackColor,
+  textColor,
 }: {
   progress: number;
   size: number;
   strokeWidth: number;
   color: string;
   trackColor: string;
+  textColor?: string;
 }) {
   const clamped = Math.min(100, Math.max(0, progress));
   const displayValue = Math.round(clamped);
@@ -1164,7 +1437,14 @@ function ProgressRing({
         />
       </Canvas>
       <View style={styles.progressRingLabel}>
-        <Text style={styles.progressRingText}>{displayValue}%</Text>
+        <Text
+          style={[
+            styles.progressRingText,
+            textColor ? { color: textColor } : null,
+          ]}
+        >
+          {displayValue}%
+        </Text>
       </View>
     </View>
   );
@@ -1234,6 +1514,108 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
     shadowRadius: 10,
     elevation: 4,
+  },
+  waterCard: {
+    backgroundColor: "#7E9AF2",
+    padding: 18,
+    overflow: "hidden",
+    position: "relative",
+  },
+  waterCardExpanded: {
+    padding: 22,
+  },
+  waterBackground: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 0,
+  },
+  waterContent: {
+    zIndex: 1,
+  },
+  waterFuzz: {
+    position: "absolute",
+    top: -20,
+    left: -30,
+    right: -30,
+    bottom: -10,
+    borderRadius: 28,
+    backgroundColor: "rgba(255,255,255,0.18)",
+  },
+  waterSparkles: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  waterSparkle: {
+    position: "absolute",
+    backgroundColor: "rgba(255,255,255,0.85)",
+  },
+  waterHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 18,
+  },
+  waterHeaderText: {
+    flex: 1,
+  },
+  waterTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.7)",
+  },
+  waterAmount: {
+    marginTop: 6,
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
+  waterAmountExpanded: {
+    fontSize: 28,
+  },
+  waterFooter: {
+    marginTop: 18,
+    gap: 12,
+  },
+  waterStats: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.18)",
+  },
+  waterStatItem: {
+    flex: 1,
+    gap: 4,
+  },
+  waterStatLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.75)",
+  },
+  waterStatValue: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
+  waterStatDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: "rgba(255,255,255,0.35)",
+  },
+  waterNoteRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.15)",
+  },
+  waterNoteText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.85)",
   },
   cardHeader: {
     gap: 6,

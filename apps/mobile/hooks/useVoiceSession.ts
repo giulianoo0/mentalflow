@@ -16,7 +16,11 @@ import {
 } from 'expo-audio';
 import { useAction, useMutation } from 'convex/react';
 import { api } from '../../../packages/fn/convex/_generated/api';
-import { parseDateTimePt } from '../../../packages/utils';
+
+let activeSessionId: string | null = null;
+let activeSessionStop: (() => void) | null = null;
+
+const createSessionId = () => `voice-${Math.random().toString(36).slice(2, 10)}`;
 
 export type VoiceSessionStatus =
     | 'idle'
@@ -43,7 +47,7 @@ interface UseVoiceSessionOptions {
 
 interface WidgetToolSearchArgs {
     title?: string;
-    type?: 'task' | 'person' | 'event' | 'note' | 'goal' | 'habit' | 'health';
+    type?: 'task' | 'person' | 'event' | 'note' | 'goal' | 'habit' | 'health' | 'water';
     limit?: number;
 }
 
@@ -51,6 +55,13 @@ interface WidgetToolUpsertArgs {
     widgets: unknown;
     links: unknown;
     sourceMessageNanoId?: string;
+}
+
+interface WidgetToolUpdateArgs {
+    nanoId: string;
+    title?: string;
+    description?: string | null;
+    data?: unknown;
 }
 
 export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
@@ -89,6 +100,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     const updateMessageContent = useMutation((api as any).messages.updateContent);
     const searchWidgetsToolAction = useAction((api as any).chat.searchWidgetsTool);
     const upsertWidgetsToolAction = useAction((api as any).chat.upsertWidgetsTool);
+    const updateWidgetMutation = useMutation((api as any).widgets.updateWidget);
     const createRealtimeSessionTokenAction = useAction((api as any).voice.createRealtimeSessionToken);
 
     const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
@@ -99,6 +111,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     const onOpenTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const flowNanoIdRef = useRef(flowNanoId);
     const pendingUserMessageIdRef = useRef<string | null>(null);
+    const sessionIdRef = useRef<string>(createSessionId());
 
     useEffect(() => {
         flowNanoIdRef.current = flowNanoId;
@@ -109,9 +122,17 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
         onStatusChange?.(newStatus);
     }, [onStatusChange]);
 
+    const releaseGlobalSession = useCallback(() => {
+        if (activeSessionId === sessionIdRef.current) {
+            activeSessionId = null;
+            activeSessionStop = null;
+        }
+    }, []);
+
     const cleanup = useCallback(() => {
         isAbortedRef.current = true;
         isConnectingRef.current = false;
+        releaseGlobalSession();
 
         if (onOpenTimeoutRef.current) {
             clearTimeout(onOpenTimeoutRef.current);
@@ -146,7 +167,7 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                 peerConnectionRef.current = null;
             }
         } catch (e) { }
-    }, [recorder, recorderState.isRecording]);
+    }, [recorder, recorderState.isRecording, releaseGlobalSession]);
 
     const getDateContext = () => {
         const now = new Date();
@@ -174,15 +195,17 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                     links: args?.links,
                     sourceMessageNanoId: args?.sourceMessageNanoId,
                 });
-            case 'parseDateTimeTool':
-                return parseDateTimePt(String(args?.text ?? ''), {
-                    baseDateMs: Date.now(),
-                    timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+            case 'updateWidget':
+                return await updateWidgetMutation({
+                    nanoId: String(args?.nanoId || ''),
+                    title: args?.title,
+                    description: args?.description ?? undefined,
+                    data: args?.data,
                 });
             default:
                 throw new Error(`Unknown tool: ${name}`);
         }
-    }, [searchWidgetsToolAction, upsertWidgetsToolAction]);
+    }, [searchWidgetsToolAction, upsertWidgetsToolAction, updateWidgetMutation]);
 
     const handleRealtimeEvent = useCallback(async (event: any) => {
         switch (event.type) {
@@ -320,6 +343,15 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
     const startSession = useCallback(async () => {
         if (isConnectingRef.current || (status !== 'idle' && status !== 'disconnected' && status !== 'error')) return;
 
+        if (activeSessionId && activeSessionId !== sessionIdRef.current) {
+            activeSessionStop?.();
+        }
+        activeSessionId = sessionIdRef.current;
+        activeSessionStop = () => {
+            cleanup();
+            updateStatus('disconnected');
+        };
+
         try {
             isAbortedRef.current = false;
             isConnectingRef.current = true;
@@ -370,11 +402,14 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                         instructions:
                             'Você é um assistente empático e acolhedor focado em saúde mental e bem-estar emocional, chamado Mindflow. Responda sempre em Português do Brasil. ' +
                             `${getDateContext()} ` +
-                            'Sempre que o usuário pedir para salvar, lembrar, registrar ou acompanhar tarefas, eventos, metas, hábitos, saúde ou notas, use as ferramentas. ' +
+                            'Sempre que o usuário pedir para salvar, lembrar, registrar ou acompanhar tarefas, eventos, metas, hábitos, saúde, hidratacao ou notas, use as ferramentas. ' +
                             'IMPORTANTE: Em listas de tarefas (ex: compras), crie UM widget task com title de grupo e relatedTitles como checklist. Nao crie varios widgets para cada item. Nao crie notes para itens individuais; tudo vai no checklist. ' +
                             'Para metas, use goal.targetValue, goal.startValue e goal.log (registro diario {"YYYY-MM-DD": numero}) e atualize goal.progress conforme o total. ' +
-                            'Quando o usuario mencionar data/hora, gere ISO 8601 em UTC (ex: "2026-01-22T15:40:27.438Z") para preencher startsAt/endsAt/dueDate. O servidor converte para unix ms. ' +
-                            'Use searchWidgetsTool para encontrar itens existentes e evitar duplicatas; use upsertWidgetsTool para criar ou atualizar widgets e links. ' +
+                            'Para hidratacao, use water.currentAmount, water.targetAmount e water.unit ("l" ou "ml") e registre water.log por dia. ' +
+                            'Quando o usuario mencionar data/hora, gere ISO 8601 com offset do fuso (ex: "2026-01-22T18:00:00-03:00") para preencher startsAt/endsAt/dueDate. O servidor converte para unix ms. ' +
+                            'Se o usuario pedir um horario que ja passou hoje, confirme se deseja o proximo dia ou ajuste sugerido. ' +
+                            'Use searchWidgetsTool para encontrar itens existentes e evitar duplicatas; use upsertWidgetsTool para criar widgets e links. ' +
+                            'Quando precisar atualizar um widget existente, use updateWidget com o nanoId. ' +
                             'Se houver dúvida sobre duplicatas, faça uma busca primeiro.',
                         tools: [
                             {
@@ -387,26 +422,12 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                                         title: { type: 'string', nullable: true },
                                         type: {
                                             type: 'string',
-                                            enum: ['task', 'person', 'event', 'note', 'goal', 'habit', 'health'],
+                                            enum: ['task', 'person', 'event', 'note', 'goal', 'habit', 'health', 'water'],
                                             nullable: true,
                                         },
                                         limit: { type: 'number', nullable: true },
                                     },
                                     required: [],
-                                },
-                            },
-                            {
-                                type: 'function',
-                                name: 'parseDateTimeTool',
-                                description: 'Converter data/hora em PT-BR para timestamp (ms) em UTC usando o fuso do usuario.',
-                                parameters: {
-                                    type: 'object',
-                                    properties: {
-                                        text: { type: 'string' },
-                                        baseDateMs: { type: 'number', nullable: true },
-                                        timezoneOffsetMinutes: { type: 'number', nullable: true },
-                                    },
-                                    required: ['text'],
                                 },
                             },
                             {
@@ -424,11 +445,11 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                                                 properties: {
                                                     type: {
                                                         type: 'string',
-                                                        enum: ['task', 'person', 'event', 'note', 'goal', 'habit', 'health'],
+                                                        enum: ['task', 'person', 'event', 'note', 'goal', 'habit', 'health', 'water'],
                                                     },
                                                     title: { type: 'string' },
                                                     description: { type: 'string', nullable: true },
-                                        dueDate: { type: 'string', nullable: true },
+                                        dueDate: { type: 'string', nullable: true, description: 'ISO 8601 com offset (ex: 2026-01-22T18:00:00-03:00)' },
                                                     priority: { type: 'string', enum: ['high', 'medium', 'low'], nullable: true },
                                                     isCompleted: { type: 'boolean', nullable: true },
                                                     person: {
@@ -444,8 +465,8 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                                                         type: 'object',
                                                         nullable: true,
                                                         properties: {
-                                                            startsAt: { type: 'string', nullable: true },
-                                                            endsAt: { type: 'string', nullable: true },
+                                                            startsAt: { type: 'string', nullable: true, description: 'ISO 8601 com offset (ex: 2026-01-22T18:00:00-03:00)' },
+                                                            endsAt: { type: 'string', nullable: true, description: 'ISO 8601 com offset (ex: 2026-01-22T18:00:00-03:00)' },
                                                             location: { type: 'string', nullable: true },
                                                         },
                                                     },
@@ -480,6 +501,20 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                                                             },
                                                         },
                                                     },
+                                                    water: {
+                                                        type: 'object',
+                                                        nullable: true,
+                                                        properties: {
+                                                            currentAmount: { type: 'number', nullable: true },
+                                                            targetAmount: { type: 'number', nullable: true },
+                                                            unit: { type: 'string', enum: ['l', 'ml'], nullable: true },
+                                                            log: {
+                                                                type: 'object',
+                                                                nullable: true,
+                                                                additionalProperties: { type: 'number' },
+                                                            },
+                                                        },
+                                                    },
                                                     relatedTitles: {
                                                         type: 'array',
                                                         nullable: true,
@@ -507,6 +542,97 @@ export function useVoiceSession(options: UseVoiceSessionOptions = {}) {
                                         sourceMessageNanoId: { type: 'string', nullable: true },
                                     },
                                     required: ['widgets', 'links'],
+                                },
+                            },
+                            {
+                                type: 'function',
+                                name: 'updateWidget',
+                                description: 'Atualizar um widget existente pelo nanoId.',
+                                parameters: {
+                                    type: 'object',
+                                    properties: {
+                                        nanoId: { type: 'string' },
+                                        title: { type: 'string', nullable: true },
+                                        description: { type: 'string', nullable: true },
+                                        data: {
+                                            type: 'object',
+                                            nullable: true,
+                                            properties: {
+                                                dueDate: { type: 'string', nullable: true, description: 'ISO 8601 com offset (ex: 2026-01-22T18:00:00-03:00)' },
+                                                priority: { type: 'string', enum: ['high', 'medium', 'low'], nullable: true },
+                                                isCompleted: { type: 'boolean', nullable: true },
+                                                person: {
+                                                    type: 'object',
+                                                    nullable: true,
+                                                    properties: {
+                                                        role: { type: 'string', nullable: true },
+                                                        contactInfo: { type: 'string', nullable: true },
+                                                        avatarUrl: { type: 'string', nullable: true },
+                                                    },
+                                                },
+                                                event: {
+                                                    type: 'object',
+                                                    nullable: true,
+                                                    properties: {
+                                                        startsAt: { type: 'string', nullable: true, description: 'ISO 8601 com offset (ex: 2026-01-22T18:00:00-03:00)' },
+                                                        endsAt: { type: 'string', nullable: true, description: 'ISO 8601 com offset (ex: 2026-01-22T18:00:00-03:00)' },
+                                                        location: { type: 'string', nullable: true },
+                                                    },
+                                                },
+                                                habit: {
+                                                    type: 'object',
+                                                    nullable: true,
+                                                    properties: {
+                                                        frequency: { type: 'string', enum: ['daily', 'weekly'], nullable: true },
+                                                        streak: { type: 'number', nullable: true },
+                                                    },
+                                                },
+                                                health: {
+                                                    type: 'object',
+                                                    nullable: true,
+                                                    properties: {
+                                                        dosage: { type: 'string', nullable: true },
+                                                        schedule: { type: 'string', nullable: true },
+                                                        status: { type: 'string', enum: ['active', 'paused', 'completed'], nullable: true },
+                                                    },
+                                                },
+                                                goal: {
+                                                    type: 'object',
+                                                    nullable: true,
+                                                    properties: {
+                                                        targetValue: { type: 'number', nullable: true },
+                                                        progress: { type: 'number', nullable: true },
+                                                        startValue: { type: 'number', nullable: true },
+                                                        log: {
+                                                            type: 'object',
+                                                            nullable: true,
+                                                            additionalProperties: { type: 'number' },
+                                                        },
+                                                    },
+                                                },
+                                                water: {
+                                                    type: 'object',
+                                                    nullable: true,
+                                                    properties: {
+                                                        currentAmount: { type: 'number', nullable: true },
+                                                        targetAmount: { type: 'number', nullable: true },
+                                                        unit: { type: 'string', enum: ['l', 'ml'], nullable: true },
+                                                        log: {
+                                                            type: 'object',
+                                                            nullable: true,
+                                                            additionalProperties: { type: 'number' },
+                                                        },
+                                                    },
+                                                },
+                                                relatedTitles: {
+                                                    type: 'array',
+                                                    nullable: true,
+                                                    items: { type: 'string' },
+                                                },
+                                            },
+                                        },
+                                    },
+                                    required: ['nanoId'],
                                 },
                             },
                         ],

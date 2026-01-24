@@ -21,6 +21,7 @@ const widgetTypeValues: WidgetType[] = [
   "goal",
   "habit",
   "health",
+  "water",
 ];
 
 export const listByFlow = query({
@@ -35,6 +36,7 @@ export const listByFlow = query({
         v.literal("goal"),
         v.literal("habit"),
         v.literal("health"),
+        v.literal("water"),
       ),
     ),
   },
@@ -98,6 +100,150 @@ export const updateRelatedTitlesCompletion = mutation({
   },
 });
 
+export const updateHabitLog = mutation({
+  args: {
+    nanoId: v.string(),
+    dateKey: v.string(),
+    checked: v.array(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { ok: false };
+
+    const widget = await ctx.db
+      .query("widgets")
+      .withIndex("by_nanoId", (q) => q.eq("nanoId", args.nanoId))
+      .first();
+    if (!widget) return { ok: false };
+
+    const flow = await ctx.db.get(widget.flowId);
+    if (!flow || flow.userId !== userId) return { ok: false };
+
+    const existingData = (widget.data || {}) as Record<string, unknown>;
+    const existingLog =
+      (existingData.habitLog as Record<string, boolean[]> | undefined) || {};
+
+    const nextData = {
+      ...existingData,
+      habitLog: {
+        ...existingLog,
+        [args.dateKey]: args.checked,
+      },
+    };
+
+    await ctx.db.patch(widget._id, {
+      data: nextData,
+      updatedAt: Date.now(),
+    });
+
+    return { ok: true };
+  },
+});
+
+export const updateWidget = mutation({
+  args: {
+    nanoId: v.string(),
+    title: v.optional(v.string()),
+    description: v.optional(v.string()),
+    data: v.optional(v.any()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { ok: false };
+
+    const widget = await ctx.db
+      .query("widgets")
+      .withIndex("by_nanoId", (q) => q.eq("nanoId", args.nanoId))
+      .first();
+    if (!widget) return { ok: false };
+
+    const flow = await ctx.db.get(widget.flowId);
+    if (!flow || flow.userId !== userId) return { ok: false };
+
+    const nextTitle = args.title?.trim() || widget.title;
+    const nextDescription =
+      args.description !== undefined ? args.description : widget.description;
+    const existingData = (widget.data || {}) as Record<string, unknown>;
+    const incomingData =
+      args.data && typeof args.data === "object"
+        ? (args.data as Record<string, unknown>)
+        : {};
+    const mergedData = mergeDataDeep(existingData, incomingData);
+
+    const dueDate = coerceDateValue(mergedData.dueDate);
+    const rawEvent = isPlainObject(mergedData.event)
+      ? (mergedData.event as Record<string, unknown>)
+      : undefined;
+    const startsAt = coerceDateValue(rawEvent?.startsAt);
+    const endsAt = coerceDateValue(rawEvent?.endsAt);
+    const eventLocation =
+      typeof rawEvent?.location === "string" ? rawEvent.location : null;
+    const rawWater = isPlainObject(mergedData.water)
+      ? (mergedData.water as Record<string, unknown>)
+      : undefined;
+    const waterUnit = rawWater?.unit === "ml" || rawWater?.unit === "l"
+      ? (rawWater.unit as "l" | "ml")
+      : null;
+
+    const widgetInput: WidgetInput = {
+      type: widget.type as WidgetInput["type"],
+      title: nextTitle,
+      description: nextDescription,
+      dueDate: dueDate ?? undefined,
+      priority: mergedData.priority as
+        | "high"
+        | "medium"
+        | "low"
+        | undefined,
+      isCompleted: mergedData.isCompleted as boolean | undefined,
+      person: mergedData.person as WidgetInput["person"],
+      event: rawEvent
+        ? {
+            startsAt: startsAt ?? null,
+            endsAt: endsAt ?? null,
+            location: eventLocation,
+          }
+        : undefined,
+      habit: mergedData.habit as WidgetInput["habit"],
+      health: mergedData.health as WidgetInput["health"],
+      goal: mergedData.goal as WidgetInput["goal"],
+      water: rawWater
+        ? {
+            currentAmount:
+              typeof rawWater.currentAmount === "number"
+                ? rawWater.currentAmount
+                : null,
+            targetAmount:
+              typeof rawWater.targetAmount === "number"
+                ? rawWater.targetAmount
+                : null,
+            unit: waterUnit,
+            log:
+              isPlainObject(rawWater.log) || rawWater.log === null
+                ? (rawWater.log as Record<string, number> | null)
+                : null,
+          }
+        : undefined,
+      relatedTitles: mergedData.relatedTitles as string[] | undefined,
+    };
+
+    const nextData = widgetDataFromInput(widgetInput);
+    const nextFingerprint = fingerprintWidget(widgetInput);
+    const titleNormalized = normalizeTitle(nextTitle);
+
+    await ctx.db.patch(widget._id, {
+      title: nextTitle,
+      description: nextDescription,
+      data: nextData,
+      fingerprint: nextFingerprint,
+      titleNormalized,
+      updatedAt: Date.now(),
+    });
+
+    return { ok: true, nanoId: widget.nanoId };
+  },
+});
+
 export const findByFlowAndTitleNormalized = query({
   args: {
     flowNanoId: v.string(),
@@ -135,6 +281,7 @@ export const searchByFlow = query({
         v.literal("goal"),
         v.literal("habit"),
         v.literal("health"),
+        v.literal("water"),
       ),
     ),
     limit: v.optional(v.number()),
@@ -197,6 +344,7 @@ export const applyUpsertPlan = mutation({
           v.literal("goal"),
           v.literal("habit"),
           v.literal("health"),
+          v.literal("water"),
         ),
         title: v.string(),
         description: v.optional(v.string()),
@@ -255,6 +403,7 @@ export const applyUpsertPlan = mutation({
         habit: upsert.data?.habit as WidgetInput["habit"],
         health: upsert.data?.health as WidgetInput["health"],
         goal: upsert.data?.goal as WidgetInput["goal"],
+        water: upsert.data?.water as WidgetInput["water"],
         relatedTitles: upsert.data?.relatedTitles as string[] | undefined,
       };
 
@@ -448,6 +597,36 @@ function mergeData(
     }
   }
   return merged;
+}
+
+function mergeDataDeep(
+  existing: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+) {
+  const merged = { ...existing };
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === undefined) continue;
+    const existingValue = merged[key];
+    if (isPlainObject(existingValue) && isPlainObject(value)) {
+      merged[key] = mergeDataDeep(existingValue, value);
+      continue;
+    }
+    merged[key] = value;
+  }
+  return merged;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function coerceDateValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return null;
 }
 
 async function resolveWidgetId(

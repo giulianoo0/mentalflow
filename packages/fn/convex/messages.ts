@@ -3,6 +3,43 @@ import { mutation, query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { nanoid } from "nanoid";
 
+const toolCallSchema = v.object({
+  name: v.string(),
+  args: v.any(),
+  result: v.any(),
+  createdAt: v.number(),
+  status: v.optional(
+    v.union(
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("error"),
+    ),
+  ),
+});
+
+const resolveFlowByNanoId = async (ctx: any, userId: string, nanoId: string) => {
+  const now = Date.now();
+  const existing = await ctx.db
+    .query("flows")
+    .withIndex("by_nanoId", (q: any) => q.eq("nanoId", nanoId))
+    .first();
+
+  if (existing) {
+    if (existing.userId !== userId) throw new Error("Flow not found");
+    await ctx.db.patch(existing._id, { updatedAt: now });
+    return { flowId: existing._id, flowNanoId: existing.nanoId };
+  }
+
+  const flowId = await ctx.db.insert("flows", {
+    userId,
+    nanoId,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return { flowId, flowNanoId: nanoId };
+};
+
 export const insert = mutation({
   args: {
     flowId: v.optional(v.id("flows")),
@@ -22,13 +59,8 @@ export const insert = mutation({
     if (!flowId) {
       const flowNanoId = args.flowNanoId;
       if (!flowNanoId) throw new Error("Missing flow identifier");
-
-      const flow = await ctx.db
-        .query("flows")
-        .withIndex("by_nanoId", (q) => q.eq("nanoId", flowNanoId))
-        .first();
-      if (!flow || flow.userId !== userId) throw new Error("Flow not found");
-      flowId = flow._id;
+      const resolved = await resolveFlowByNanoId(ctx, userId, flowNanoId);
+      flowId = resolved.flowId;
     }
 
     const dedupeKey = args.dedupeKey;
@@ -78,16 +110,7 @@ export const updateContent = mutation({
     messageId: v.id("messages"),
     content: v.string(),
     isComplete: v.optional(v.boolean()),
-    toolCalls: v.optional(
-      v.array(
-        v.object({
-          name: v.string(),
-          args: v.any(),
-          result: v.any(),
-          createdAt: v.number(),
-        })
-      )
-    ),
+    toolCalls: v.optional(v.array(toolCallSchema)),
     reasoningSummary: v.optional(v.string()),
     thinkingMs: v.optional(v.number()),
     model: v.optional(v.string()),
@@ -111,6 +134,28 @@ export const updateContent = mutation({
       }),
       ...(args.thinkingMs !== undefined && { thinkingMs: args.thinkingMs }),
       ...(args.model !== undefined && { model: args.model }),
+    });
+    await ctx.db.patch(message.flowId, { updatedAt: Date.now() });
+  },
+});
+
+export const updateToolCalls = mutation({
+  args: {
+    messageId: v.id("messages"),
+    toolCalls: v.array(toolCallSchema),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const message = await ctx.db.get(args.messageId);
+    if (!message) throw new Error("Message not found");
+
+    const flow = await ctx.db.get(message.flowId);
+    if (!flow || flow.userId !== userId) throw new Error("Flow not found");
+
+    await ctx.db.patch(args.messageId, {
+      toolCalls: args.toolCalls,
     });
     await ctx.db.patch(message.flowId, { updatedAt: Date.now() });
   },
@@ -194,22 +239,18 @@ export const createPending = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const flow = await ctx.db
-      .query("flows")
-      .withIndex("by_nanoId", (q) => q.eq("nanoId", args.flowNanoId))
-      .first();
-    if (!flow || flow.userId !== userId) throw new Error("Flow not found");
+    const flow = await resolveFlowByNanoId(ctx, userId, args.flowNanoId);
 
     const now = Date.now();
     const messageId = await ctx.db.insert("messages", {
-      flowId: flow._id,
+      flowId: flow.flowId,
       nanoId: nanoid(),
       role: args.role,
       content: "",
       createdAt: now,
       isComplete: false,
     });
-    await ctx.db.patch(flow._id, { updatedAt: now });
+    await ctx.db.patch(flow.flowId, { updatedAt: now });
     return messageId;
   },
 });

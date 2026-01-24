@@ -5,7 +5,8 @@ export type WidgetType =
   | "note"
   | "goal"
   | "habit"
-  | "health";
+  | "health"
+  | "water";
 
 export type LinkKind =
   | "mentions"
@@ -47,6 +48,14 @@ export type WidgetInput = {
   goal?: {
     targetValue?: number | null;
     progress?: number | null;
+    startValue?: number | null;
+    log?: Record<string, number> | null;
+  };
+  water?: {
+    currentAmount?: number | null;
+    targetAmount?: number | null;
+    unit?: "l" | "ml" | null;
+    log?: Record<string, number> | null;
   };
   relatedTitles?: string[];
 };
@@ -310,7 +319,15 @@ export function widgetCanonicalPayload(widget: WidgetInput) {
     goal: widget.goal
       ? {
         targetValue: widget.goal.targetValue ?? null,
-        progress: widget.goal.progress ?? null,
+        startValue: widget.goal.startValue ?? null,
+      }
+      : null,
+    water: widget.water
+      ? {
+        currentAmount: widget.water.currentAmount ?? null,
+        targetAmount: widget.water.targetAmount ?? null,
+        unit: widget.water.unit ?? null,
+        log: widget.water.log ?? null,
       }
       : null,
     relatedTitles:
@@ -340,6 +357,7 @@ export function widgetDataFromInput(widget: WidgetInput) {
     habit: widget.habit,
     health: widget.health,
     goal: widget.goal,
+    water: widget.water,
     relatedTitles: widget.relatedTitles || [],
   };
 }

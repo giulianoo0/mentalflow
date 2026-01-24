@@ -40,6 +40,9 @@ interface ChatInputBarProps {
     onSend: () => void;
     onVoicePress?: () => void;
     placeholder?: string;
+    allowSend?: boolean;
+    primaryAction?: 'voice' | 'plus';
+    displayMode?: 'chat' | 'drawer' | 'widgets';
     // Voice session props
     isVoiceActive?: boolean;
     voiceElapsedTime?: number;
@@ -59,6 +62,9 @@ export function ChatInputBar({
     onSend,
     onVoicePress,
     placeholder = 'Mensagem...',
+    allowSend = true,
+    primaryAction = 'voice',
+    displayMode = 'chat',
     isVoiceActive = false,
     voiceElapsedTime = 0,
     voiceAudioLevel = 0,
@@ -73,7 +79,13 @@ export function ChatInputBar({
     const insets = useSafeAreaInsets();
     const { width: screenWidth } = useWindowDimensions();
     const inputRef = React.useRef<TextInput>(null);
-    const canSend = value.trim().length > 0;
+    const canSend = allowSend && value.trim().length > 0;
+    const canStartVoice = !isVoiceActive && (voiceStatus === 'idle' || voiceStatus === 'disconnected' || voiceStatus === 'error');
+    const isWidgetMode = displayMode === 'widgets';
+    const handleVoicePress = React.useCallback(() => {
+        if (!canStartVoice) return;
+        onVoicePress?.();
+    }, [canStartVoice, onVoicePress]);
 
     // State for expansion based on keyboard
     const isExpanded = useSharedValue(0);
@@ -82,14 +94,21 @@ export function ChatInputBar({
 
     // Internal button size
     const INTERNAL_BUTTON_SIZE = 42;
-    const internalButtonWidth = useSharedValue(canSend ? INTERNAL_BUTTON_SIZE : 90);
-    const backgroundButtonWidth = useSharedValue(canSend ? LAYOUT.BUTTON_SIZE : 90);
+    const collapsedButtonWidth = primaryAction === 'plus' ? 48 : 90;
+    const internalButtonWidth = useSharedValue(
+        canSend ? INTERNAL_BUTTON_SIZE : collapsedButtonWidth,
+    );
+    const backgroundButtonWidth = useSharedValue(
+        canSend ? LAYOUT.BUTTON_SIZE : collapsedButtonWidth,
+    );
 
     // Morphing button animation values
-    const COLLAPSED_WIDTH = 90;
+    const COLLAPSED_WIDTH = primaryAction === 'plus' ? 48 : 90;
+    const COLLAPSED_HEIGHT = primaryAction === 'plus' ? 48 : LAYOUT.INPUT_HEIGHT;
     const LEFT_SPACING = 16; // Spacing from left screen edge when expanded
     const FULL_WIDTH = screenWidth - 12 - LEFT_SPACING; // From right inset to left margin
     const morphingWidth = useSharedValue(COLLAPSED_WIDTH);
+    const widgetModeProgress = useSharedValue(isWidgetMode ? 1 : 0);
 
     useEffect(() => {
         const showSub = Keyboard.addListener('keyboardWillShow', () => {
@@ -123,40 +142,50 @@ export function ChatInputBar({
     // Animate morphing button width when voice active changes
     useEffect(() => {
         morphingWidth.value = withTiming(
-            isVoiceActive ? FULL_WIDTH : COLLAPSED_WIDTH,
+            isVoiceActive && primaryAction === 'voice' ? FULL_WIDTH : COLLAPSED_WIDTH,
             { duration: ANIMATION_DURATION, easing: customEasing }
         );
-    }, [isVoiceActive, FULL_WIDTH]);
+    }, [isVoiceActive, FULL_WIDTH, primaryAction]);
+
+    useEffect(() => {
+        widgetModeProgress.value = withTiming(isWidgetMode ? 1 : 0, {
+            duration: ANIMATION_DURATION,
+            easing: customEasing,
+        });
+    }, [isWidgetMode]);
+
 
     const expandedInputWidth = screenWidth - 24 + 4;
     const bottomInset = Math.max(insets.bottom, 12);
 
     const wrapperAnimatedStyle = useAnimatedStyle(() => {
+        const expanded = isExpanded.value;
         const currentCollapsedWidth = screenWidth - 24 - backgroundButtonWidth.value - 10;
-        const width = interpolate(isExpanded.value, [0, 1], [currentCollapsedWidth, expandedInputWidth]);
-        const height = interpolate(isExpanded.value, [0, 1], [LAYOUT.INPUT_HEIGHT, contentHeight]);
-        const borderRadius = interpolate(isExpanded.value, [0, 1], [LAYOUT.INPUT_HEIGHT / 2, 24]);
+        const width = interpolate(expanded, [0, 1], [currentCollapsedWidth, expandedInputWidth]);
+        const height = interpolate(expanded, [0, 1], [LAYOUT.INPUT_HEIGHT, contentHeight]);
+        const borderRadius = interpolate(expanded, [0, 1], [LAYOUT.INPUT_HEIGHT / 2, 24]);
 
         return {
             width,
             height,
             borderRadius,
             bottom: 0,
-            zIndex: isExpanded.value > 0.1 ? 50 : 10,
+            zIndex: expanded > 0.1 ? 50 : 10,
         };
     });
 
     const inputAnimatedStyle = useAnimatedStyle(() => {
-        const paddingTop = interpolate(isExpanded.value, [0, 1], [6, 12]);
-        const paddingLeft = interpolate(isExpanded.value, [0, 1], [LAYOUT.BUTTON_SIZE, 16]);
-        const paddingRight = interpolate(isExpanded.value, [0, 1], [12, 16]);
+        const expanded = isExpanded.value;
+        const paddingTop = interpolate(expanded, [0, 1], [6, 12]);
+        const paddingLeft = interpolate(expanded, [0, 1], [LAYOUT.BUTTON_SIZE, 16]);
+        const paddingRight = interpolate(expanded, [0, 1], [12, 16]);
         const expandedInputHeight = contentHeight - 40; // Adjusted for better internal alignment
 
         return {
             paddingTop,
             paddingLeft,
             paddingRight,
-            height: interpolate(isExpanded.value, [0, 1], [LAYOUT.INPUT_HEIGHT, expandedInputHeight]),
+            height: interpolate(expanded, [0, 1], [LAYOUT.INPUT_HEIGHT, expandedInputHeight]),
         };
     });
 
@@ -182,9 +211,16 @@ export function ChatInputBar({
     });
 
     useEffect(() => {
-        internalButtonWidth.value = withTiming(canSend ? INTERNAL_BUTTON_SIZE : 90, { duration: ANIMATION_DURATION, easing: customEasing });
-        backgroundButtonWidth.value = withTiming(canSend ? LAYOUT.BUTTON_SIZE : 90, { duration: ANIMATION_DURATION, easing: customEasing });
-    }, [canSend]);
+        const baseWidth = primaryAction === 'plus' ? 48 : 90;
+        internalButtonWidth.value = withTiming(
+            canSend ? INTERNAL_BUTTON_SIZE : baseWidth,
+            { duration: ANIMATION_DURATION, easing: customEasing },
+        );
+        backgroundButtonWidth.value = withTiming(
+            canSend ? LAYOUT.BUTTON_SIZE : baseWidth,
+            { duration: ANIMATION_DURATION, easing: customEasing },
+        );
+    }, [canSend, primaryAction]);
 
     const handleContentSizeChange = (event: any) => {
         const newHeight = event.nativeEvent.contentSize.height;
@@ -206,10 +242,14 @@ export function ChatInputBar({
 
     // Morphing button style - width animates from collapsed to full
     const morphingButtonStyle = useAnimatedStyle(() => {
+        const containerWidth = screenWidth - 24;
+        const centeredShift = -0.5 * (containerWidth - morphingWidth.value);
         return {
             width: morphingWidth.value,
             bottom: 0,
-            height: LAYOUT.INPUT_HEIGHT,
+            height: COLLAPSED_HEIGHT,
+            borderRadius: COLLAPSED_HEIGHT / 2,
+            transform: [{ translateX: centeredShift * widgetModeProgress.value }],
         };
     });
 
@@ -254,6 +294,17 @@ export function ChatInputBar({
         };
     });
 
+    const widgetInputFadeStyle = useAnimatedStyle(() => {
+        const progress = widgetModeProgress.value;
+        return {
+            opacity: interpolate(progress, [0, 1], [1, 0], Extrapolation.CLAMP),
+            transform: [
+                { translateY: interpolate(progress, [0, 1], [0, 12]) },
+                { scale: interpolate(progress, [0, 1], [1, 0.96]) },
+            ],
+        };
+    });
+
     return (
         <KeyboardStickyView offset={{ closed: 0, opened: 8 }}>
             <View style={[styles.outerContainer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
@@ -282,8 +333,9 @@ export function ChatInputBar({
                             styles.expandingInputWrapper,
                             wrapperAnimatedStyle,
                             inputFadeStyle,
+                            widgetInputFadeStyle,
                         ]}
-                        pointerEvents={isVoiceActive ? 'none' : 'auto'}
+                        pointerEvents={isVoiceActive || isWidgetMode ? 'none' : 'auto'}
                     >
                         {/* Invisible pressable overlay when collapsed */}
                         {!isKeyboardVisible && !isVoiceActive && (
@@ -295,7 +347,11 @@ export function ChatInputBar({
 
                         {/* Plus Button */}
                         <AnimatedPressable style={[styles.plusButton, plusButtonAnimatedStyle]}>
-                            <Ionicons name="add" size={30} color="#999" />
+                            <Ionicons
+                                name="add"
+                                size={30}
+                                color={primaryAction === 'plus' ? "#FFF" : "#999"}
+                            />
                         </AnimatedPressable>
 
                         {/* Text Input */}
@@ -314,7 +370,8 @@ export function ChatInputBar({
                         {/* Internal Fale/Send Button */}
                         <AnimatedPressable
                             style={[styles.internalFaleButton, internalFaleButtonAnimatedStyle]}
-                            onPress={canSend ? handleSend : onVoicePress}
+                            onPress={canSend ? handleSend : handleVoicePress}
+                            disabled={!canSend && !canStartVoice}
                         >
                             <LinearGradient
                                 colors={['black', 'black']}
@@ -325,10 +382,14 @@ export function ChatInputBar({
                                 {canSend ? (
                                     <Ionicons name="arrow-up" size={24} color="#FFF" />
                                 ) : (
-                                    <>
-                                        <Ionicons name="mic-outline" size={18} color="#FFF" />
-                                        <Text style={styles.faleText}>Fale</Text>
-                                    </>
+                                    primaryAction === 'plus' ? (
+                                        <Ionicons name="add" size={22} color="#FFF" />
+                                    ) : (
+                                        <>
+                                            <Ionicons name="mic-outline" size={18} color="#FFF" />
+                                            <Text style={styles.faleText}>Fale</Text>
+                                        </>
+                                    )
                                 )}
                             </LinearGradient>
                         </AnimatedPressable>
@@ -340,34 +401,42 @@ export function ChatInputBar({
                         <Animated.View style={[styles.faleContentWrapper, faleContentStyle]}>
                             <Pressable
                                 style={styles.faleButtonInner}
-                                onPress={onVoicePress}
-                                disabled={isVoiceActive}
+                                onPress={handleVoicePress}
+                                disabled={!canStartVoice}
                             >
-                                <Ionicons name="mic-outline" size={18} color="#FFF" />
-                                <Text style={styles.faleText}>Fale</Text>
+                                {primaryAction === 'plus' ? (
+                                    <Ionicons name="add" size={22} color="#FFF" />
+                                ) : (
+                                    <>
+                                        <Ionicons name="mic-outline" size={18} color="#FFF" />
+                                        <Text style={styles.faleText}>Fale</Text>
+                                    </>
+                                )}
                             </Pressable>
                         </Animated.View>
 
-                        <Animated.View
-                            style={[styles.voiceContentWrapper, voiceContentStyle]}
-                            pointerEvents={isVoiceActive ? 'auto' : 'none'}
-                        >
-                            <VoiceRecordingBar
-                                elapsedTime={voiceElapsedTime || 0}
-                                audioLevel={voiceAudioLevel || 0}
-                                aiAudioLevel={voiceAiAudioLevel || 0}
-                                isSpeaking={voiceIsSpeaking || false}
-                                isMuted={voiceIsMuted || false}
-                                status={voiceStatus || 'idle'}
-                                onGenerate={onVoiceGenerate || (() => { })}
-                                onKeyboardPress={() => {
-                                    onVoiceClose?.();
-                                    setTimeout(() => inputRef.current?.focus(), 100);
-                                }}
-                                onMuteToggle={onVoiceMuteToggle || (() => { })}
-                                onClose={onVoiceClose || (() => { })}
-                            />
-                        </Animated.View>
+                        {primaryAction === 'voice' && (
+                            <Animated.View
+                                style={[styles.voiceContentWrapper, voiceContentStyle]}
+                                pointerEvents={isVoiceActive ? 'auto' : 'none'}
+                            >
+                                <VoiceRecordingBar
+                                    elapsedTime={voiceElapsedTime || 0}
+                                    audioLevel={voiceAudioLevel || 0}
+                                    aiAudioLevel={voiceAiAudioLevel || 0}
+                                    isSpeaking={voiceIsSpeaking || false}
+                                    isMuted={voiceIsMuted || false}
+                                    status={voiceStatus || 'idle'}
+                                    onGenerate={onVoiceGenerate || (() => { })}
+                                    onKeyboardPress={() => {
+                                        onVoiceClose?.();
+                                        setTimeout(() => inputRef.current?.focus(), 100);
+                                    }}
+                                    onMuteToggle={onVoiceMuteToggle || (() => { })}
+                                    onClose={onVoiceClose || (() => { })}
+                                />
+                            </Animated.View>
+                        )}
                     </Animated.View>
                 </View>
 

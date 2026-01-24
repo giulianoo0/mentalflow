@@ -32,6 +32,13 @@ const schema = defineSchema({
                     args: v.any(),
                     result: v.any(),
                     createdAt: v.number(),
+                    status: v.optional(
+                        v.union(
+                            v.literal("running"),
+                            v.literal("completed"),
+                            v.literal("error")
+                        )
+                    ),
                 })
             )
         ),
@@ -67,7 +74,8 @@ const schema = defineSchema({
             v.literal("note"),
             v.literal("goal"),
             v.literal("habit"),
-            v.literal("health")
+            v.literal("health"),
+            v.literal("water")
         ),
         title: v.string(),
         description: v.optional(v.string()),

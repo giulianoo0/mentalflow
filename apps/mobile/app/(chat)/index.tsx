@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from "react";
+import React, { useRef, useEffect, useState } from "react";
 import { LinearGradient } from "expo-linear-gradient";
 import {
   View,
@@ -26,17 +26,14 @@ import Animated, {
   Easing,
 } from "react-native-reanimated";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
-import { useQuery, useMutation, useAction } from "convex/react";
-import { nanoid } from "nanoid/non-secure";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useQuery } from "convex/react";
+import { useLocalSearchParams } from "expo-router";
 import { api } from "../../../../packages/fn/convex/_generated/api";
 
 import { ChatHeader } from "@/components/chat/chat-header";
-import { ChatInputBar } from "@/components/chat/chat-input-bar";
 import { StreamdownRN } from "streamdown-rn";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useVoiceSession } from "@/hooks/useVoiceSession";
-import { useDrawerContext } from "./_layout";
+import { useDrawerContext, useChatRuntime } from "./_layout";
 
 const BlinkingCircle = () => {
   const opacity = useSharedValue(0.3);
@@ -243,7 +240,13 @@ const ReasoningPanel = ({
   isStreaming: boolean;
   reasoningSummary?: string;
   reasoning?: string;
-  toolCalls?: Array<{ name: string; args: any; result: any; createdAt: number }>;
+  toolCalls?: Array<{
+    name: string;
+    args: any;
+    result: any;
+    createdAt: number;
+    status?: "running" | "completed" | "error";
+  }>;
   thinkingMs?: number;
 }) => {
   const [isOpen, setIsOpen] = useState(isStreaming);
@@ -341,31 +344,23 @@ const ReasoningPanel = ({
 const formatToolCall = (call: {
   name: string;
   result: any;
+  status?: "running" | "completed" | "error";
 }) => {
-  if (call.name === "upsertWidgets") {
-    const upserts = call.result?.upserts ?? 0;
-    const links = call.result?.links ?? 0;
-    return `widgets=${upserts} links=${links}`;
+  if (call.status === "running") {
+    return "em andamento";
   }
-  if (call.name === "searchWidgets") {
-    const count = call.result?.count ?? 0;
-    return `encontrados=${count}`;
+  if (call.status === "error") {
+    return "falhou";
   }
   return "executado";
 };
 
 export default function ChatScreen() {
-  const [inputText, setInputText] = React.useState("");
   const { height: keyboardHeight } = useReanimatedKeyboardAnimation();
   const { height: screenHeight } = useWindowDimensions();
-  const router = useRouter();
   const params = useLocalSearchParams();
   const { setActiveFlowNanoId } = useDrawerContext();
-  const [pendingAssistant, setPendingAssistant] = React.useState<{
-    requestId: string;
-    createdAt: number;
-  } | null>(null);
-  const [isSending, setIsSending] = React.useState(false);
+  const { pendingAssistant, setPendingAssistant } = useChatRuntime();
   // Track component heights for precise spacing calculations
   const [lastUserMessageHeight, setLastUserMessageHeight] = useState(0);
   const [chatHeaderHeight, setChatHeaderHeight] = useState(90);
@@ -378,8 +373,6 @@ export default function ChatScreen() {
   );
   const flowNanoId = activeFlowId || paramFlowId;
   console.log("[ChatScreen] Computed flowNanoId:", flowNanoId);
-  const [isCreatingFlow, setIsCreatingFlow] = useState(false);
-
   // Sync local flow ID with context when it changes
   useEffect(() => {
     setActiveFlowNanoId(flowNanoId);
@@ -398,7 +391,6 @@ export default function ChatScreen() {
   useEffect(() => {
     if (prevFlowRef.current !== flowNanoId) {
       setPendingAssistant(null);
-      setIsSending(false);
       setLastUserMessageHeight(0);
       flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
       prevFlowRef.current = flowNanoId;
@@ -410,123 +402,6 @@ export default function ChatScreen() {
     (api as any).messages.listByFlow,
     flowNanoId ? { flowNanoId } : "skip",
   );
-
-  // Voice session state
-  const [isVoiceActive, setIsVoiceActive] = useState(false);
-  const [voiceElapsedTime, setVoiceElapsedTime] = useState(0);
-  const [isMuted, setIsMuted] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const createFlow = useMutation((api as any).flows.createFlow);
-  const insertMessage = useMutation(
-    (api as any).messages.insert,
-  ).withOptimisticUpdate((localStore: any, args: any) => {
-    if (!args.flowNanoId) return;
-    const existing = localStore.getQuery((api as any).messages.listByFlow, {
-      flowNanoId: args.flowNanoId,
-    });
-    if (!existing) return;
-
-    localStore.setQuery(
-      (api as any).messages.listByFlow,
-      { flowNanoId: args.flowNanoId },
-      [
-        ...existing,
-        {
-          _id: `optimistic-${args.nanoId || Date.now()}`,
-          _creationTime: Date.now(),
-          flowId: "optimistic",
-          nanoId: args.nanoId,
-          role: args.role,
-          content: args.content,
-          createdAt: args.createdAt ?? Date.now(),
-          isComplete: args.isComplete ?? true,
-          dedupeKey: args.dedupeKey,
-        },
-      ],
-    );
-  });
-  const sendMessageWorkflow = useAction((api as any).chat.sendMessageWorkflow);
-
-  // Voice session hook
-  const voiceSession = useVoiceSession({
-    flowNanoId,
-    onStatusChange: (status) => {
-      if (status === "connected" || status === "listening") {
-        if (!timerRef.current) {
-          timerRef.current = setInterval(() => {
-            setVoiceElapsedTime((prev) => prev + 1);
-          }, 1000);
-        }
-      }
-      if (status === "disconnected" || status === "error") {
-        if (timerRef.current) {
-          clearInterval(timerRef.current);
-          timerRef.current = null;
-        }
-      }
-    },
-    onError: (error) => {
-      console.error("[Voice] Error:", error);
-      handleVoiceClose();
-    },
-  });
-
-  // Voice session handlers
-  const handleVoiceStart = useCallback(async () => {
-    setIsVoiceActive(true);
-    setVoiceElapsedTime(0);
-    setIsMuted(false);
-    Keyboard.dismiss();
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
-    if (!flowNanoId) {
-      setIsCreatingFlow(true);
-      try {
-        const newFlow = await createFlow({ title: "Nova conversa de voz" });
-        setActiveFlowId(newFlow.flowNanoId);
-        router.setParams({ flowId: newFlow.flowNanoId });
-      } catch (error) {
-        console.error("Failed to create thread:", error);
-        setIsVoiceActive(false);
-        return;
-      } finally {
-        setIsCreatingFlow(false);
-      }
-    }
-
-    await voiceSession.startSession();
-  }, [voiceSession, flowNanoId, createFlow]);
-
-  const handleVoiceClose = useCallback(() => {
-    setIsVoiceActive(false);
-    setVoiceElapsedTime(0);
-    setIsMuted(false);
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    voiceSession.stopSession();
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  }, [voiceSession]);
-
-  const handleVoiceGenerate = useCallback(() => {
-    handleVoiceClose();
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  }, [handleVoiceClose]);
-
-  const handleVoiceMuteToggle = useCallback(() => {
-    setIsMuted((prev) => !prev);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  }, []);
-
-  // Cleanup timer on unmount
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-    };
-  }, []);
 
   // Format messages for display
   const messages = React.useMemo(() => {
@@ -545,7 +420,13 @@ export default function ChatScreen() {
           ? msg.reasoningChunks.map((c: any) => c.content).join("")
           : undefined,
       toolCalls: msg.toolCalls as
-        | Array<{ name: string; args: any; result: any; createdAt: number }>
+        | Array<{
+            name: string;
+            args: any;
+            result: any;
+            createdAt: number;
+            status?: "running" | "completed" | "error";
+          }>
         | undefined,
       thinkingMs: msg.thinkingMs as number | undefined,
       model: msg.model as string | undefined,
@@ -584,12 +465,6 @@ export default function ChatScreen() {
     }
   }, [convexMessages, pendingAssistant]);
 
-  React.useEffect(() => {
-    if (!pendingAssistant && isSending) {
-      setIsSending(false);
-    }
-  }, [pendingAssistant, isSending]);
-
   const prevFlowIdRef = useRef<string | undefined>(flowNanoId);
   const flatListRef = useRef<FlatList>(null);
 
@@ -614,9 +489,6 @@ export default function ChatScreen() {
 
   useEffect(() => {
     if (!flowNanoId && prevFlowIdRef.current) {
-      setInputText("");
-      setIsSending(false);
-      voiceSession.resetSession();
       setActiveFlowId(undefined);
     }
   }, [flowNanoId]);
@@ -631,8 +503,6 @@ export default function ChatScreen() {
     }
     return false;
   }, [messages]);
-
-  const isSendLocked = isSending || isStreaming;
 
   const status = pendingAssistant
     ? "submitted"
@@ -699,58 +569,6 @@ export default function ChatScreen() {
     return () => backHandler.remove();
   }, []);
 
-  const handleSend = async () => {
-    const trimmedInput = inputText.trim();
-    if (!trimmedInput || isSendLocked) return;
-
-    const message = trimmedInput;
-    setInputText("");
-    setIsSending(true);
-
-    try {
-      let activeFlowNanoId = flowNanoId;
-      if (!activeFlowNanoId) {
-        setIsCreatingFlow(true);
-        try {
-          const newFlow = await createFlow({});
-          activeFlowNanoId = newFlow.flowNanoId;
-          setActiveFlowId(activeFlowNanoId);
-          router.setParams({ flowId: activeFlowNanoId });
-        } finally {
-          setIsCreatingFlow(false);
-        }
-      }
-
-      const requestId = nanoid();
-      const userMessageNanoId = nanoid();
-      const createdAt = Date.now();
-
-      await insertMessage({
-        flowNanoId: activeFlowNanoId,
-        nanoId: userMessageNanoId,
-        role: "user",
-        content: message,
-        dedupeKey: `req:${requestId}:user`,
-        isComplete: true,
-        createdAt,
-      });
-
-      setPendingAssistant({ requestId, createdAt });
-
-      await sendMessageWorkflow({
-        flowNanoId: activeFlowNanoId,
-        content: message,
-        requestId,
-        userMessageNanoId,
-        clientCreatedAt: createdAt,
-      });
-    } catch (error) {
-      console.error("Error sending message:", error);
-      setInputText(message);
-      setPendingAssistant(null);
-      setIsSending(false);
-    }
-  };
 
   const renderMessage = ({ item, index }: { item: any; index: number }) => {
     const isUser = item.role === "user";
@@ -760,6 +578,15 @@ export default function ChatScreen() {
     const isLastUserMessage = index === lastUserMessageIndex;
     const isLastAssistantMessage = isLastMessage && !isUser;
     const isMsgStreaming = !item.isComplete && !isUser;
+    const trimmedSummary = item.reasoningSummary?.trim();
+    const hasReasoningSummary = Boolean(
+      trimmedSummary &&
+        trimmedSummary !== "Sem resumo." &&
+        trimmedSummary !== "Nenhuma ferramenta usada.",
+    );
+    const hasReasoning = Boolean(item.reasoning?.trim());
+    const hasToolCalls = (item.toolCalls?.length ?? 0) > 0;
+    const showReasoningPanel = hasReasoning || hasReasoningSummary || hasToolCalls;
 
     const topSpacing = 24;
     const assistantContentPadding = 24;
@@ -811,12 +638,11 @@ export default function ChatScreen() {
         ) : (
           <>
             <View style={styles.assistantBody}>
-              {!isUser &&
-                (item.reasoning || item.reasoningSummary || item.toolCalls) ? (
+              {!isUser && showReasoningPanel ? (
                 <ReasoningPanel
                   isStreaming={isMsgStreaming}
-                  reasoningSummary={item.reasoningSummary}
-                  reasoning={item.reasoning}
+                  reasoningSummary={hasReasoningSummary ? item.reasoningSummary : undefined}
+                  reasoning={hasReasoning ? item.reasoning : undefined}
                   toolCalls={item.toolCalls}
                   thinkingMs={item.thinkingMs}
                 />
@@ -901,22 +727,6 @@ export default function ChatScreen() {
           />
         </Animated.View>
 
-        <ChatInputBar
-          value={inputText}
-          onChangeText={setInputText}
-          onSend={handleSend}
-          onVoicePress={handleVoiceStart}
-          isVoiceActive={isVoiceActive}
-          voiceElapsedTime={voiceElapsedTime}
-          voiceAudioLevel={voiceSession.audioLevel}
-          voiceAiAudioLevel={voiceSession.aiAudioLevel}
-          voiceIsSpeaking={voiceSession.isSpeaking}
-          voiceStatus={voiceSession.status}
-          voiceIsMuted={isMuted}
-          onVoiceGenerate={handleVoiceGenerate}
-          onVoiceMuteToggle={handleVoiceMuteToggle}
-          onVoiceClose={handleVoiceClose}
-        />
       </View>
     </LinearGradient>
   );
