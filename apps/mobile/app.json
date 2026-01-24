@@ -1,6 +1,7 @@
 {
   "expo": {
-    "name": "mobile",
+    "name": "mentalflowai",
+    "company": "flashz",
     "slug": "mentalflow",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -9,10 +10,12 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.mobile",
+      "companyName": "flashz servicos digitais",
+      "supportsTablet": false,
+      "bundleIdentifier": "com.flashz.mentalflow",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Mindflow precisa acessar o microfone para conversas por voz com o assistente."
+        "NSMicrophoneUsageDescription": "Mindflow precisa acessar o microfone para conversas por voz com o assistente.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "bitcode": false
     },
@@ -67,6 +70,14 @@
         "expo-audio",
         {
           "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "15.1"
+          }
         }
       ]
     ],
