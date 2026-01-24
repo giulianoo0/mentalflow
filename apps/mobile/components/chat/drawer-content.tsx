@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { LinearGradient } from "expo-linear-gradient";
 import { useDrawerContext } from "../../app/(chat)/_layout";
+import { GlassIconButton, isGlassAvailable } from "./glass-surface";
 
 const { width: screenWidth } = Dimensions.get("window");
 
@@ -26,6 +27,8 @@ export function ChatDrawerContent({
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { setActiveFlowNanoId } = useDrawerContext();
+  const glassEnabled = isGlassAvailable;
+  const iconTone = glassEnabled ? "#0B0B0C" : "#000";
 
   const flowsRaw = useQuery((api as any).flows.listByUser);
   const flows = flowsRaw || [];
@@ -48,10 +51,10 @@ export function ChatDrawerContent({
   const normalizedSearch = searchText.trim().toLowerCase();
   const filteredFlows = normalizedSearch
     ? flows.filter((flow: any) =>
-      String(flow.title || "Nova Conversa")
-        .toLowerCase()
-        .includes(normalizedSearch),
-    )
+        String(flow.title || "Nova Conversa")
+          .toLowerCase()
+          .includes(normalizedSearch),
+      )
     : flows;
 
   const leftFlows = filteredFlows.filter((_: any, i: number) => i % 2 === 0);
@@ -68,7 +71,7 @@ export function ChatDrawerContent({
     >
       <View>
         <Text style={styles.cardTitle} numberOfLines={2}>
-            {item.title || "Nova Conversa"}
+          {item.title || "Nova Conversa"}
         </Text>
         <Text style={styles.cardPreview} numberOfLines={3}>
           Procurando emails dos remanecentes hisotircos da taxa absia para ter
@@ -113,24 +116,30 @@ export function ChatDrawerContent({
         )}
       </ScrollView>
 
-      {/* Floating Absolute Header with Gentle Fade */}
+      {/* Floating Absolute Header */}
       <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
-        <LinearGradient
-          colors={["#FFF4EB", "rgba(255, 244, 235, 0.8)", "transparent"]}
-          locations={[0, 0.1, 1]}
-          style={[StyleSheet.absoluteFill, { height: insets.top + 90 }]}
-        />
         <View style={styles.headerRow}>
-          <Pressable style={styles.headerIconButton}>
-            <Ionicons name="person-outline" size={24} color="#000" />
-          </Pressable>
-          <View style={{ flex: 1 }} />
-          <Pressable
+          <GlassIconButton
             style={styles.headerIconButton}
+            fallbackStyle={styles.headerIconFallback}
+            glassStyle={styles.headerIconGlass}
+            disabled
+          >
+            <Ionicons name="person-outline" size={24} color={iconTone} />
+          </GlassIconButton>
+          <View style={{ flex: 1 }} />
+          <GlassIconButton
+            style={styles.headerIconButton}
+            fallbackStyle={styles.headerIconFallback}
+            glassStyle={styles.headerIconGlass}
             onPress={() => navigation.closeDrawer()}
           >
-            <Ionicons name="chevron-forward-outline" size={24} color="#000" />
-          </Pressable>
+            <Ionicons
+              name="chevron-forward-outline"
+              size={24}
+              color={iconTone}
+            />
+          </GlassIconButton>
         </View>
       </View>
     </LinearGradient>
@@ -159,14 +168,20 @@ const styles = StyleSheet.create({
     width: 50,
     height: 50,
     borderRadius: 25,
+  },
+  headerIconFallback: {
     backgroundColor: "rgba(255, 255, 255, 1)",
-    justifyContent: "center",
-    alignItems: "center",
     elevation: 2,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,
     shadowRadius: 2,
+  },
+  headerIconGlass: {
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.65)",
+    boxShadow: "0 14px 30px rgba(15, 23, 42, 0.16)",
   },
   listContent: {
     paddingHorizontal: 16,

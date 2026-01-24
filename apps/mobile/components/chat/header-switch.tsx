@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { StyleSheet, View, Text, Pressable, Platform } from "react-native";
+import { StyleSheet, View } from "react-native";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -10,6 +10,11 @@ import Animated, {
 import { GestureDetector, Gesture } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import {
+  GlassIconButton,
+  GlassSurface,
+  isGlassAvailable,
+} from "./glass-surface";
 
 export type SwitchMode = "chat" | "drawer";
 
@@ -33,6 +38,9 @@ export function HeaderSwitch({
   externalPosition,
 }: HeaderSwitchProps) {
   const internalPosition = useSharedValue(activeMode === "chat" ? 0 : 1);
+  const glassEnabled = isGlassAvailable;
+  const activeIconColor = glassEnabled ? "#0B0B0C" : "#000";
+  const inactiveIconColor = glassEnabled ? "rgba(11,11,12,0.55)" : "#666";
   // For external position, we need to map -1..1 range to 0..1 range for the switch
   // Only care about 0 (chat) and 1 (right drawer), ignore -1 (left drawer)
   const position = externalPosition || internalPosition;
@@ -108,17 +116,36 @@ export function HeaderSwitch({
 
   return (
     <GestureDetector gesture={pan}>
-      <View style={styles.container}>
-        {/* Background Track */}
-        <View style={styles.track} />
+      <View
+        style={[
+          styles.container,
+          glassEnabled ? styles.containerGlass : styles.containerFallback,
+        ]}
+      >
+        <GlassSurface style={StyleSheet.absoluteFill} highlightOpacity={0.32} />
+        {!glassEnabled && <View style={styles.track} />}
 
         {/* Sliding Indicator */}
-        <Animated.View style={[styles.indicator, indicatorStyle]} />
+        <Animated.View
+          style={[
+            styles.indicator,
+            glassEnabled ? styles.indicatorGlass : styles.indicatorFallback,
+            indicatorStyle,
+          ]}
+        >
+          <GlassSurface
+            style={StyleSheet.absoluteFill}
+            highlightOpacity={0.6}
+          />
+        </Animated.View>
 
         {/* Icons Layer - ZIndex higher to receive taps if needed, but GestureDetector wraps all */}
         <View style={styles.iconsContainer}>
-          <Pressable
+          <GlassIconButton
             style={styles.tab}
+            fallbackStyle={styles.tabFallback}
+            glassStyle={styles.tabGlass}
+            useDefaultGlassStyle={false}
             onPress={() => onModeChange("chat")}
             hitSlop={8}
           >
@@ -127,12 +154,17 @@ export function HeaderSwitch({
             <Ionicons
               name="chatbubbles"
               size={20}
-              color={activeMode === "chat" ? "#000" : "#666"}
+              color={
+                activeMode === "chat" ? activeIconColor : inactiveIconColor
+              }
             />
-          </Pressable>
+          </GlassIconButton>
 
-          <Pressable
+          <GlassIconButton
             style={styles.tab}
+            fallbackStyle={styles.tabFallback}
+            glassStyle={styles.tabGlass}
+            useDefaultGlassStyle={false}
             onPress={() => onModeChange("drawer")}
             hitSlop={8}
           >
@@ -140,9 +172,11 @@ export function HeaderSwitch({
               // Using a generic icon for "drawer/widget" concept as per request for "C" like logo in image or just drawer
               name="grid"
               size={20}
-              color={activeMode === "drawer" ? "#000" : "#666"}
+              color={
+                activeMode === "drawer" ? activeIconColor : inactiveIconColor
+              }
             />
-          </Pressable>
+          </GlassIconButton>
         </View>
       </View>
     </GestureDetector>
@@ -154,10 +188,20 @@ const styles = StyleSheet.create({
     width: SWITCH_WIDTH,
     height: SWITCH_HEIGHT,
     borderRadius: SWITCH_HEIGHT / 2,
-    backgroundColor: "rgba(230, 230, 235, 0.5)", // Subtle gray track
     padding: PADDING,
     position: "relative",
     justifyContent: "center",
+    overflow: "hidden",
+    borderCurve: "continuous",
+  },
+  containerFallback: {
+    backgroundColor: "rgba(230, 230, 235, 0.5)", // Subtle gray track
+  },
+  containerGlass: {
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.6)",
+    boxShadow: "0 12px 26px rgba(15, 23, 42, 0.14)",
   },
   track: {
     ...StyleSheet.absoluteFillObject,
@@ -167,6 +211,13 @@ const styles = StyleSheet.create({
     width: TAB_WIDTH,
     height: SWITCH_HEIGHT - PADDING * 2,
     borderRadius: (SWITCH_HEIGHT - PADDING * 2) / 2,
+    position: "absolute",
+    left: PADDING,
+    top: PADDING,
+    overflow: "hidden",
+    borderCurve: "continuous",
+  },
+  indicatorFallback: {
     backgroundColor: "#FFFFFF",
     shadowColor: "#000",
     shadowOffset: {
@@ -176,9 +227,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 3,
     elevation: 2,
-    position: "absolute",
-    left: PADDING,
-    top: PADDING,
+  },
+  indicatorGlass: {
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.7)",
+    boxShadow: "0 8px 18px rgba(15, 23, 42, 0.1)",
   },
   iconsContainer: {
     flexDirection: "row",
@@ -190,5 +244,17 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     zIndex: 1,
+    borderRadius: (SWITCH_HEIGHT - PADDING * 2) / 2,
+    borderCurve: "continuous",
+  },
+  tabFallback: {
+    backgroundColor: "transparent",
+    borderWidth: 0,
+  },
+  tabGlass: {
+    backgroundColor: "rgba(255,255,255,0.02)",
+    borderWidth: 0,
+    borderColor: "transparent",
+    boxShadow: "0 0 0 rgba(0,0,0,0)",
   },
 });

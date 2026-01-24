@@ -23,6 +23,7 @@ import Animated, {
   interpolate,
 } from "react-native-reanimated";
 import { api } from "../../../../packages/fn/convex/_generated/api";
+import { GlassIconButton, isGlassAvailable } from "./glass-surface";
 
 const { width: screenWidth } = Dimensions.get("window");
 const horizontalPadding = 16;
@@ -95,6 +96,8 @@ export function WidgetDrawer({
 }: WidgetDrawerProps) {
   console.log("[WidgetDrawer] Render with flowNanoId:", flowNanoId);
   const insets = useSafeAreaInsets();
+  const glassEnabled = isGlassAvailable;
+  const iconTone = glassEnabled ? "#0B0B0C" : "#000";
   const widgets = useQuery(
     api.widgets.listByFlow,
     flowNanoId ? { flowNanoId } : "skip",
@@ -125,11 +128,17 @@ export function WidgetDrawer({
   );
 
   const events = React.useMemo(
-    () => widgetCards.filter((widget) => widget.type === "event" && matchesWidget(widget)),
+    () =>
+      widgetCards.filter(
+        (widget) => widget.type === "event" && matchesWidget(widget),
+      ),
     [widgetCards, matchesWidget],
   );
   const nonEventWidgets = React.useMemo(
-    () => widgetCards.filter((widget) => widget.type !== "event" && matchesWidget(widget)),
+    () =>
+      widgetCards.filter(
+        (widget) => widget.type !== "event" && matchesWidget(widget),
+      ),
     [widgetCards, matchesWidget],
   );
   const renderItems = React.useMemo(
@@ -203,6 +212,28 @@ export function WidgetDrawer({
           </View>
         )}
       </ScrollView>
+
+      <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
+        <View style={styles.headerRow}>
+          <GlassIconButton
+            style={styles.iconButton}
+            fallbackStyle={styles.iconButtonFallback}
+            glassStyle={styles.iconButtonGlass}
+            onPress={onClose}
+          >
+            <Ionicons name="chevron-back-outline" size={22} color={iconTone} />
+          </GlassIconButton>
+          <View style={{ flex: 1 }} />
+          <GlassIconButton
+            style={styles.iconButton}
+            fallbackStyle={styles.iconButtonFallback}
+            glassStyle={styles.iconButtonGlass}
+            disabled
+          >
+            <Ionicons name="person-outline" size={22} color={iconTone} />
+          </GlassIconButton>
+        </View>
+      </View>
     </LinearGradient>
   );
 }
@@ -414,11 +445,12 @@ function WidgetCard({
         ? habitItems
         : [];
   const hasChecklist = checklistItems.length > 0;
-  const [todayKey, setTodayKey] = React.useState(() => formatDateKey(new Date()));
-  const habitLog =
-    (data.habitLog && typeof data.habitLog === "object" ? data.habitLog : {}) as
-      | Record<string, boolean[]>
-      | undefined;
+  const [todayKey, setTodayKey] = React.useState(() =>
+    formatDateKey(new Date()),
+  );
+  const habitLog = (
+    data.habitLog && typeof data.habitLog === "object" ? data.habitLog : {}
+  ) as Record<string, boolean[]> | undefined;
   const habitToday = habitLog?.[todayKey];
 
   const initialChecked = React.useMemo(() => {
@@ -432,7 +464,13 @@ function WidgetCard({
         : [];
     if (saved.length === checklistItems.length) return saved;
     return checklistItems.map(() => false);
-  }, [checklistItems, data.relatedTitlesCompleted, habitToday, hasChecklist, isHabit]);
+  }, [
+    checklistItems,
+    data.relatedTitlesCompleted,
+    habitToday,
+    hasChecklist,
+    isHabit,
+  ]);
   const [checkedItems, setCheckedItems] =
     React.useState<boolean[]>(initialChecked);
   const checklistSignature = React.useMemo(
@@ -486,7 +524,10 @@ function WidgetCard({
   }
 
   const shouldShowDescription =
-    !!widget.description && !isTask && !isHabit && !(isHealth && hasHealthChecklist);
+    !!widget.description &&
+    !isTask &&
+    !isHabit &&
+    !(isHealth && hasHealthChecklist);
 
   return (
     <Animated.View
@@ -512,8 +553,9 @@ function WidgetCard({
       ) : isTask || isHabit ? (
         <View style={styles.todoHeader}>
           <Text style={styles.cardTitle}>{widget.title}</Text>
-          {isExpanded && hasChecklist && (
-            isHabit ? (
+          {isExpanded &&
+            hasChecklist &&
+            (isHabit ? (
               <Text style={styles.todoCounter}>
                 {String(pendingItems).padStart(2, "0")} Pendentes
               </Text>
@@ -521,8 +563,7 @@ function WidgetCard({
               <Text style={styles.todoCounter}>
                 {completedItems}/{totalItems} Concluidas
               </Text>
-            )
-          )}
+            ))}
         </View>
       ) : (
         <View style={styles.cardHeader}>
@@ -797,12 +838,10 @@ function WaterCard({
 }) {
   const water = widget.data?.water || {};
   const unit = water.unit === "ml" ? "ml" : "l";
-  const current = typeof water.currentAmount === "number"
-    ? water.currentAmount
-    : 0;
-  const target = typeof water.targetAmount === "number"
-    ? water.targetAmount
-    : 0;
+  const current =
+    typeof water.currentAmount === "number" ? water.currentAmount : 0;
+  const target =
+    typeof water.targetAmount === "number" ? water.targetAmount : 0;
   const progress = target > 0 ? Math.round((current / target) * 100) : 0;
   const remaining = Math.max(0, target - current);
   const unitLabel = unit === "ml" ? "ml" : "l";
@@ -1082,13 +1121,15 @@ function GoalSummaryCard({
       const meta = data.goal || {};
       const startValue = meta.startValue ?? 0;
       const log = meta.log || {};
-      const loggedTotal = Object.values(log).reduce((acc, value) =>
-        acc + (typeof value === "number" ? value : 0), 0,
+      const loggedTotal = Object.values(log).reduce(
+        (acc, value) => acc + (typeof value === "number" ? value : 0),
+        0,
       );
       const targetValue = meta.targetValue ?? 0;
-      const rawProgress = targetValue > 0
-        ? Math.round(((startValue + loggedTotal) / targetValue) * 100)
-        : meta.progress ?? 0;
+      const rawProgress =
+        targetValue > 0
+          ? Math.round(((startValue + loggedTotal) / targetValue) * 100)
+          : (meta.progress ?? 0);
       const progress = Math.min(100, Math.max(0, rawProgress));
       return {
         widget: goal,
@@ -1142,7 +1183,11 @@ function GoalSummaryCard({
                 </View>
                 {item.dueLabel ? (
                   <View style={styles.goalDueRow}>
-                    <Ionicons name="calendar-outline" size={14} color="#7A7A7A" />
+                    <Ionicons
+                      name="calendar-outline"
+                      size={14}
+                      color="#7A7A7A"
+                    />
                     <Text style={styles.goalDueText}>{item.dueLabel}</Text>
                   </View>
                 ) : null}
@@ -1165,7 +1210,9 @@ function HabitSummaryCard({
   isExpanded: boolean;
 }) {
   const updateHabitLog = useMutation(api.widgets.updateHabitLog);
-  const [todayKey, setTodayKey] = React.useState(() => formatDateKey(new Date()));
+  const [todayKey, setTodayKey] = React.useState(() =>
+    formatDateKey(new Date()),
+  );
 
   React.useEffect(() => {
     const now = new Date();
@@ -1206,10 +1253,9 @@ function HabitSummaryCard({
     const next: Record<string, boolean[]> = {};
     for (const group of habitGroups) {
       const data = group.habit.data || {};
-      const habitLog =
-        (data.habitLog && typeof data.habitLog === "object"
-          ? data.habitLog
-          : {}) as Record<string, boolean[]>;
+      const habitLog = (
+        data.habitLog && typeof data.habitLog === "object" ? data.habitLog : {}
+      ) as Record<string, boolean[]>;
       const saved = habitLog?.[todayKey] ?? data.relatedTitlesCompleted ?? [];
       next[group.habit.nanoId] = group.items.map((_, index) =>
         Boolean(saved[index]),
@@ -1249,13 +1295,12 @@ function HabitSummaryCard({
   }, [flattenedItems, checkedByHabit]);
 
   const totalItems = flattenedItems.length;
-  const completedItems = flattenedItems.filter((item) =>
-    checkedByHabit[item.habit.nanoId]?.[item.index],
+  const completedItems = flattenedItems.filter(
+    (item) => checkedByHabit[item.habit.nanoId]?.[item.index],
   ).length;
   const pendingItems = totalItems - completedItems;
-  const progressPercent = totalItems > 0
-    ? Math.round((completedItems / totalItems) * 100)
-    : 0;
+  const progressPercent =
+    totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
 
   return (
     <Animated.View
@@ -1475,14 +1520,20 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
+  },
+  iconButtonFallback: {
     backgroundColor: "rgba(255,255,255,0.95)",
-    alignItems: "center",
-    justifyContent: "center",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08,
     shadowRadius: 8,
     elevation: 3,
+  },
+  iconButtonGlass: {
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.65)",
+    boxShadow: "0 14px 30px rgba(15, 23, 42, 0.16)",
   },
   iconPill: {
     flexDirection: "row",

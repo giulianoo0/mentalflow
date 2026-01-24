@@ -1,12 +1,10 @@
 import React from "react";
-import { View, Text, Pressable, StyleSheet, Platform } from "react-native";
-import { BlurView } from "expo-blur";
-import { LinearGradient } from "expo-linear-gradient";
-import MaskedView from "@react-native-masked-view/masked-view";
+import { View, StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation, DrawerActions } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { LAYOUT } from "../../constants/layout";
+import { GlassIconButton, isGlassAvailable } from "./glass-surface";
 
 interface ChatHeaderProps {
   title: string;
@@ -23,6 +21,8 @@ export function ChatHeader({
 }: ChatHeaderProps) {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
+  const glassEnabled = isGlassAvailable;
+  const iconTone = glassEnabled ? "#0B0B0C" : "#1A1A1A";
 
   const handleOpenDrawer = () => {
     navigation.dispatch(DrawerActions.openDrawer());
@@ -56,46 +56,30 @@ export function ChatHeader({
 
   return (
     <View style={[styles.outerContainer, { paddingTop: insets.top }]}>
-      {/* Progressive Blur Implementation using MaskedView */}
-      <View style={styles.blurContainer}>
-        <MaskedView
-          style={StyleSheet.absoluteFill}
-          maskElement={
-            <LinearGradient
-              colors={["rgba(0,0,0,1)", "rgba(0,0,0,0)"]}
-              start={{ x: 0, y: 0.2 }}
-              end={{ x: 0, y: 1 }}
-              style={StyleSheet.absoluteFill}
-            />
-          }
-        >
-          <BlurView
-            intensity={25}
-            tint="light"
-            style={StyleSheet.absoluteFill}
-          />
-        </MaskedView>
-      </View>
-
       <View style={styles.container}>
         {/* Menu Button */}
-        <Pressable
-          style={({ pressed }) => [
-            styles.menuButton,
-            pressed && styles.menuButtonPressed,
-          ]}
+        <GlassIconButton
           onPress={handleOpenDrawer}
+          style={styles.menuButton}
+          fallbackStyle={styles.menuButtonFallback}
+          glassStyle={styles.menuButtonGlass}
+          pressedStyle={styles.menuButtonPressed}
         >
-          <Ionicons name="menu" size={24} color="#1A1A1A" />
-        </Pressable>
+          <Ionicons name="menu" size={24} color={iconTone} />
+        </GlassIconButton>
 
         {/* Center Content (Title or Switch) */}
         {centerContent && centerContent}
 
         {/* Right Placeholder / Avatar */}
-        <View style={[styles.avatarContainer, { opacity: 0 }]}>
-          <Text style={styles.avatarEmoji}>👤</Text>
-        </View>
+        <GlassIconButton
+          style={styles.avatarButton}
+          fallbackStyle={styles.avatarFallback}
+          glassStyle={styles.avatarGlass}
+          disabled
+        >
+          <Ionicons name="person-outline" size={20} color={iconTone} />
+        </GlassIconButton>
       </View>
     </View>
   );
@@ -109,11 +93,6 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 100,
   },
-  blurContainer: {
-    ...StyleSheet.absoluteFillObject,
-    // Extend blur slightly below content
-    bottom: -20,
-  },
   container: {
     flexDirection: "row",
     alignItems: "center",
@@ -125,9 +104,8 @@ const styles = StyleSheet.create({
     width: LAYOUT.BUTTON_SIZE,
     height: LAYOUT.BUTTON_SIZE,
     borderRadius: LAYOUT.BUTTON_SIZE / 2,
-    overflow: "hidden",
-    justifyContent: "center",
-    alignItems: "center",
+  },
+  menuButtonFallback: {
     backgroundColor: "#FFFFFF",
     borderWidth: 1.5,
     borderColor: "#FFFFFF",
@@ -139,6 +117,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
+  },
+  menuButtonGlass: {
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.65)",
+    boxShadow: "0 14px 30px rgba(15, 23, 42, 0.16)",
   },
   menuButtonPressed: {
     opacity: 0.7,
@@ -181,18 +165,20 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     marginTop: 1,
   },
-  avatarContainer: {
+  avatarButton: {
     width: LAYOUT.BUTTON_SIZE,
     height: LAYOUT.BUTTON_SIZE,
     borderRadius: LAYOUT.BUTTON_SIZE / 2,
-    overflow: "hidden",
-    justifyContent: "center",
-    alignItems: "center",
+  },
+  avatarFallback: {
     backgroundColor: "rgba(255, 136, 0, 0.1)",
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.3)",
   },
-  avatarEmoji: {
-    fontSize: 22,
+  avatarGlass: {
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.65)",
+    boxShadow: "0 14px 30px rgba(15, 23, 42, 0.16)",
   },
 });
