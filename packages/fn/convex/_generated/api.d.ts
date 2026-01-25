@@ -15,6 +15,7 @@ import type * as http from "../http.js";
 import type * as lib_widget_utils from "../lib/widget_utils.js";
 import type * as maintenance from "../maintenance.js";
 import type * as messages from "../messages.js";
+import type * as users from "../users.js";
 import type * as voice from "../voice.js";
 import type * as widgetLinks from "../widgetLinks.js";
 import type * as widgets from "../widgets.js";
@@ -33,6 +34,7 @@ declare const fullApi: ApiFromModules<{
   "lib/widget_utils": typeof lib_widget_utils;
   maintenance: typeof maintenance;
   messages: typeof messages;
+  users: typeof users;
   voice: typeof voice;
   widgetLinks: typeof widgetLinks;
   widgets: typeof widgets;

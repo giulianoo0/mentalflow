@@ -1,39 +1,55 @@
-import React from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
-import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
+import React from "react";
+import { View, ActivityIndicator, StyleSheet } from "react-native";
+import { useConvexAuth, useQuery } from "convex/react";
 import { Redirect } from "expo-router";
+import { api } from "../../../packages/fn/convex/_generated/api";
 
 interface AuthenticatedOnlyProps {
-    children: React.ReactNode;
+  children: React.ReactNode;
 }
 
 /**
  * Wrapper component that protects routes requiring authentication.
- * Uses Convex's declarative auth components instead of useEffect for cleaner code.
  */
 export function AuthenticatedOnly({ children }: AuthenticatedOnlyProps) {
+  const { isLoading, isAuthenticated } = useConvexAuth();
+  const user = useQuery(
+    (api as any).users.getCurrentUser,
+    isAuthenticated ? {} : "skip",
+  );
+
+  if (isLoading) {
     return (
-        <>
-            <AuthLoading>
-                <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color="#FF8800" />
-                </View>
-            </AuthLoading>
-            <Unauthenticated>
-                <Redirect href="/onboarding" />
-            </Unauthenticated>
-            <Authenticated>
-                {children}
-            </Authenticated>
-        </>
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#FF8800" />
+      </View>
     );
+  }
+
+  if (!isAuthenticated) {
+    return <Redirect href="/onboarding" />;
+  }
+
+  if (user === undefined) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#FF8800" />
+      </View>
+    );
+  }
+
+  if (!user?.completed_onboarding_at) {
+    return <Redirect href="/onboarding" />;
+  }
+
+  return <>{children}</>;
 }
 
 const styles = StyleSheet.create({
-    loadingContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: '#F5F3F0',
-    },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#F5F3F0",
+  },
 });
