@@ -69,6 +69,10 @@ function RootLayoutNav() {
       <Stack>
         <Stack.Screen name="onboarding" options={{ headerShown: false }} />
         <Stack.Screen name="(chat)" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="settings-modal"
+          options={{ presentation: "modal", headerShown: false }}
+        />
 
         <Stack.Screen
           name="modal"
