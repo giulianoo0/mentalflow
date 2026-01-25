@@ -212,10 +212,17 @@ const ShimmerInline = ({ text }: { text: string }) => {
         >
           <View style={{ flex: 1, backgroundColor: "#666" }} />
           <Animated.View
-            style={[{ position: "absolute", top: 0, bottom: 0, width: 60 }, animatedStyle]}
+            style={[
+              { position: "absolute", top: 0, bottom: 0, width: 60 },
+              animatedStyle,
+            ]}
           >
             <LinearGradient
-              colors={["transparent", "rgba(255, 255, 255, 0.9)", "transparent"]}
+              colors={[
+                "transparent",
+                "rgba(255, 255, 255, 0.9)",
+                "transparent",
+              ]}
               start={{ x: 0, y: 0.5 }}
               end={{ x: 1, y: 0.5 }}
               style={{ flex: 1 }}
@@ -458,7 +465,7 @@ export default function ChatScreen() {
       (msg: any) =>
         msg.role === "assistant" &&
         new Date(msg.createdAt ?? msg._creationTime).getTime() >=
-        pendingAssistant.createdAt,
+          pendingAssistant.createdAt,
     );
     if (hasAssistant) {
       setPendingAssistant(null);
@@ -569,7 +576,6 @@ export default function ChatScreen() {
     return () => backHandler.remove();
   }, []);
 
-
   const renderMessage = ({ item, index }: { item: any; index: number }) => {
     const isUser = item.role === "user";
     const text = item.content || "";
@@ -581,39 +587,36 @@ export default function ChatScreen() {
     const trimmedSummary = item.reasoningSummary?.trim();
     const hasReasoningSummary = Boolean(
       trimmedSummary &&
-        trimmedSummary !== "Sem resumo." &&
-        trimmedSummary !== "Nenhuma ferramenta usada.",
+      trimmedSummary !== "Sem resumo." &&
+      trimmedSummary !== "Nenhuma ferramenta usada.",
     );
     const hasReasoning = Boolean(item.reasoning?.trim());
     const hasToolCalls = (item.toolCalls?.length ?? 0) > 0;
-    const showReasoningPanel = hasReasoning || hasReasoningSummary || hasToolCalls;
+    const showReasoningPanel =
+      hasReasoning || hasReasoningSummary || hasToolCalls;
 
     const topSpacing = 24;
     const assistantContentPadding = 24;
     const prevMessage = messages[index - 1];
     const isAfterAssistant = isUser && prevMessage?.role === "assistant";
-    const userTopSpacing = isLastUserMessage
-      ? 24
-      : isAfterAssistant
-        ? 16
-        : 0;
+    const userTopSpacing = isLastUserMessage ? 24 : isAfterAssistant ? 16 : 0;
 
     const hasMultipleTurns = messages.length > 2;
     const minAssistantHeight =
       isLastAssistantMessage &&
-        hasMultipleTurns &&
-        lastUserMessageHeight > 0 &&
-        chatHeaderHeight > 0 &&
-        inputBarHeight > 0
+      hasMultipleTurns &&
+      lastUserMessageHeight > 0 &&
+      chatHeaderHeight > 0 &&
+      inputBarHeight > 0
         ? Math.max(
-          0,
-          screenHeight -
-          chatHeaderHeight -
-          inputBarHeight -
-          topSpacing -
-          lastUserMessageHeight -
-          assistantContentPadding,
-        ) + 80
+            0,
+            screenHeight -
+              chatHeaderHeight -
+              inputBarHeight -
+              topSpacing -
+              lastUserMessageHeight -
+              assistantContentPadding,
+          ) + 80
         : undefined;
 
     return (
@@ -641,7 +644,9 @@ export default function ChatScreen() {
               {!isUser && showReasoningPanel ? (
                 <ReasoningPanel
                   isStreaming={isMsgStreaming}
-                  reasoningSummary={hasReasoningSummary ? item.reasoningSummary : undefined}
+                  reasoningSummary={
+                    hasReasoningSummary ? item.reasoningSummary : undefined
+                  }
                   reasoning={hasReasoning ? item.reasoning : undefined}
                   toolCalls={item.toolCalls}
                   thinkingMs={item.thinkingMs}
@@ -694,18 +699,18 @@ export default function ChatScreen() {
             renderItem={
               isLoading
                 ? () => (
-                  <View
-                    style={[styles.messageContainer, styles.assistantMessage]}
-                  >
-                    <Skeleton
-                      width="70%"
-                      height={20}
-                      borderRadius={10}
-                      style={{ marginBottom: 8 }}
-                    />
-                    <Skeleton width="40%" height={16} borderRadius={8} />
-                  </View>
-                )
+                    <View
+                      style={[styles.messageContainer, styles.assistantMessage]}
+                    >
+                      <Skeleton
+                        width="70%"
+                        height={20}
+                        borderRadius={10}
+                        style={{ marginBottom: 8 }}
+                      />
+                      <Skeleton width="40%" height={16} borderRadius={8} />
+                    </View>
+                  )
                 : renderMessage
             }
             keyExtractor={(item, index) =>
@@ -726,7 +731,6 @@ export default function ChatScreen() {
             }}
           />
         </Animated.View>
-
       </View>
     </LinearGradient>
   );

@@ -8,10 +8,10 @@ import React, {
   useRef,
 } from "react";
 import { StyleSheet, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Drawer as ExpoDrawer } from "expo-router/drawer";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Drawer } from "react-native-drawer-layout";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAction, useMutation } from "convex/react";
 import { nanoid } from "nanoid/non-secure";
@@ -269,7 +269,6 @@ export default function ChatLayout() {
     await voiceSession.startSession();
   }, [voiceSession, currentFlowNanoId, createFlow, router]);
 
-
   const handleVoiceClose = useCallback(() => {
     setIsVoiceActive(false);
     setVoiceElapsedTime(0);
@@ -291,7 +290,10 @@ export default function ChatLayout() {
       setIsSending(false);
       const newFlowNanoId = nanoid();
       setActiveFlowNanoId(newFlowNanoId);
-      router.replace({ pathname: "/(chat)", params: { flowId: newFlowNanoId } });
+      router.replace({
+        pathname: "/(chat)",
+        params: { flowId: newFlowNanoId },
+      });
       setRightDrawerOpen(false);
       setLeftDrawerOpen(false);
     } catch (error) {
@@ -460,9 +462,9 @@ export default function ChatLayout() {
             </Drawer>
             {/* Floating header switch at layout level - stays centered */}
             <FloatingHeaderSwitch />
-              <ChatInputBar
-                value={inputValue}
-                onChangeText={(text) => {
+            <ChatInputBar
+              value={inputValue}
+              onChangeText={(text) => {
                 if (inputMode === "widgets") {
                   setWidgetSearchText(text);
                   return;
@@ -474,16 +476,14 @@ export default function ChatLayout() {
                 setChatInputText(text);
               }}
               onSend={handleSend}
-            onVoicePress={
-              inputMode === "drawer"
-                ? handleNewChat
-                : handleVoiceStart
-            }
-                placeholder={inputPlaceholder}
-                allowSend={allowSend}
-                primaryAction={primaryAction}
-                displayMode={inputMode}
-                isVoiceActive={isVoiceActive}
+              onVoicePress={
+                inputMode === "drawer" ? handleNewChat : handleVoiceStart
+              }
+              placeholder={inputPlaceholder}
+              allowSend={allowSend}
+              primaryAction={primaryAction}
+              displayMode={inputMode}
+              isVoiceActive={isVoiceActive}
               voiceElapsedTime={voiceElapsedTime}
               voiceAudioLevel={voiceSession.audioLevel}
               voiceAiAudioLevel={voiceSession.aiAudioLevel}

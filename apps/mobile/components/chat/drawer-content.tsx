@@ -15,8 +15,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { LinearGradient } from "expo-linear-gradient";
+import { Host } from "@expo/ui/swift-ui";
 import { useDrawerContext } from "../../app/(chat)/_layout";
 import { GlassIconButton, isGlassAvailable } from "./glass-surface";
+import { SettingsBottomSheet } from "./settings-bottom-sheet";
 
 const { width: screenWidth } = Dimensions.get("window");
 
@@ -29,6 +31,7 @@ export function ChatDrawerContent({
   const { setActiveFlowNanoId } = useDrawerContext();
   const glassEnabled = isGlassAvailable;
   const iconTone = glassEnabled ? "#0B0B0C" : "#000";
+  const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
 
   const flowsRaw = useQuery((api as any).flows.listByUser);
   const flows = flowsRaw || [];
@@ -88,61 +91,70 @@ export function ChatDrawerContent({
   );
 
   return (
-    <LinearGradient
-      colors={["#FFF4EB", "#F6F9FF", "#F4F4F4"]}
-      locations={[0.24, 0.53, 0.63]}
-      style={styles.container}
-    >
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={[
-          styles.listContent,
-          { paddingTop: insets.top + 70 },
-        ]}
+    <View style={styles.container}>
+      <LinearGradient
+        colors={["#FFF4EB", "#F6F9FF", "#F4F4F4"]}
+        locations={[0.24, 0.53, 0.63]}
+        style={styles.container}
       >
-        <View style={styles.masonryContainer}>
-          <View style={styles.column}>
-            {leftFlows.map((t: any, i: number) => renderCard(t, i, false))}
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.listContent,
+            { paddingTop: insets.top + 70 },
+          ]}
+        >
+          <View style={styles.masonryContainer}>
+            <View style={styles.column}>
+              {leftFlows.map((t: any, i: number) => renderCard(t, i, false))}
+            </View>
+            <View style={styles.column}>
+              {rightFlows.map((t: any, i: number) => renderCard(t, i, true))}
+            </View>
           </View>
-          <View style={styles.column}>
-            {rightFlows.map((t: any, i: number) => renderCard(t, i, true))}
+
+          {flows.length === 0 && !isLoading && (
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>Sem conversas ainda</Text>
+            </View>
+          )}
+        </ScrollView>
+
+        {/* Floating Absolute Header */}
+        <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
+          <View style={styles.headerRow}>
+            <GlassIconButton
+              style={styles.headerIconButton}
+              fallbackStyle={styles.headerIconFallback}
+              glassStyle={styles.headerIconGlass}
+              onPress={() => setIsSettingsOpen(true)}
+            >
+              <Ionicons name="settings-outline" size={24} color={iconTone} />
+            </GlassIconButton>
+            <View style={{ flex: 1 }} />
+            <GlassIconButton
+              style={styles.headerIconButton}
+              fallbackStyle={styles.headerIconFallback}
+              glassStyle={styles.headerIconGlass}
+              onPress={() => navigation.closeDrawer()}
+            >
+              <Ionicons
+                name="chevron-forward-outline"
+                size={24}
+                color={iconTone}
+              />
+            </GlassIconButton>
           </View>
         </View>
+      </LinearGradient>
 
-        {flows.length === 0 && !isLoading && (
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>Sem conversas ainda</Text>
-          </View>
-        )}
-      </ScrollView>
-
-      {/* Floating Absolute Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
-        <View style={styles.headerRow}>
-          <GlassIconButton
-            style={styles.headerIconButton}
-            fallbackStyle={styles.headerIconFallback}
-            glassStyle={styles.headerIconGlass}
-            disabled
-          >
-            <Ionicons name="person-outline" size={24} color={iconTone} />
-          </GlassIconButton>
-          <View style={{ flex: 1 }} />
-          <GlassIconButton
-            style={styles.headerIconButton}
-            fallbackStyle={styles.headerIconFallback}
-            glassStyle={styles.headerIconGlass}
-            onPress={() => navigation.closeDrawer()}
-          >
-            <Ionicons
-              name="chevron-forward-outline"
-              size={24}
-              color={iconTone}
-            />
-          </GlassIconButton>
-        </View>
-      </View>
-    </LinearGradient>
+      <Host style={styles.sheetHost}>
+        <SettingsBottomSheet
+          isOpen={isSettingsOpen}
+          onOpenChange={setIsSettingsOpen}
+        />
+      </Host>
+    </View>
   );
 }
 
@@ -150,6 +162,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     zIndex: 200,
+  },
+  sheetHost: {
+    width: 0,
+    height: 0,
   },
   header: {
     position: "absolute",

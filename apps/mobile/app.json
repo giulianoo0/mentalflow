@@ -79,7 +79,9 @@
             "deploymentTarget": "15.1"
           }
         }
-      ]
+      ],
+      "expo-secure-store",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
