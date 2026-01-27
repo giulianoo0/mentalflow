@@ -773,6 +773,7 @@ const styles = StyleSheet.create({
     alignSelf: "flex-end",
     backgroundColor: "white",
     padding: 12,
+    opacity: 1,
     borderRadius: 16,
     marginBottom: 12,
   },

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
@@ -6,10 +6,13 @@ import {
   Pressable,
   Dimensions,
   ScrollView,
+  Modal,
+  TextInput,
+  Alert,
 } from "react-native";
 import { DrawerContentComponentProps } from "@react-navigation/drawer";
 import { useRouter } from "expo-router";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../../packages/fn/convex/_generated/api";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -26,9 +29,19 @@ export function ChatDrawerContent({
 }: DrawerContentComponentProps & { searchText?: string }) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { setActiveFlowNanoId } = useDrawerContext();
+  const { setActiveFlowNanoId, activeFlowNanoId } = useDrawerContext();
   const glassEnabled = isGlassAvailable;
   const iconTone = glassEnabled ? "#0B0B0C" : "#000";
+
+  const renameFlow = useMutation((api as any).flows.renameFlow);
+  const deleteFlow = useMutation((api as any).flows.deleteFlow);
+  const [optionsVisible, setOptionsVisible] = useState(false);
+  const [renameVisible, setRenameVisible] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [selectedFlow, setSelectedFlow] = useState<{
+    nanoId: string;
+    title?: string;
+  } | null>(null);
 
   const flowsRaw = useQuery((api as any).flows.listByUser);
   const flows = flowsRaw || [];
@@ -38,6 +51,48 @@ export function ChatDrawerContent({
     setActiveFlowNanoId(flowNanoId);
     router.replace({ pathname: "/(chat)", params: { flowId: flowNanoId } });
     navigation.closeDrawer();
+  };
+
+  const handleFlowLongPress = (flow: { nanoId: string; title?: string }) => {
+    setSelectedFlow(flow);
+    setRenameValue(flow.title || "");
+    setOptionsVisible(true);
+  };
+
+  const handleRenameSubmit = async () => {
+    const name = renameValue.trim();
+    if (!selectedFlow || !name) return;
+    try {
+      await renameFlow({ flowNanoId: selectedFlow.nanoId, title: name });
+      setRenameVisible(false);
+      setOptionsVisible(false);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleDeleteConfirm = () => {
+    if (!selectedFlow) return;
+    const targetFlowId = selectedFlow.nanoId;
+    setOptionsVisible(false);
+    Alert.alert("Excluir conversa?", "Esta ação não pode ser desfeita.", [
+      { text: "Cancelar", style: "cancel" },
+      {
+        text: "Excluir",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await deleteFlow({ flowNanoId: targetFlowId });
+            if (activeFlowNanoId === targetFlowId) {
+              setActiveFlowNanoId(undefined);
+              router.replace({ pathname: "/(chat)" });
+            }
+          } catch (error) {
+            console.error(error);
+          }
+        },
+      },
+    ]);
   };
 
   const formatTimestamp = (date: number) => {
@@ -68,6 +123,7 @@ export function ChatDrawerContent({
         pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
       ]}
       onPress={() => handleFlowPress(item.nanoId)}
+      onLongPress={() => handleFlowLongPress(item)}
     >
       <View>
         <Text style={styles.cardTitle} numberOfLines={2}>
@@ -142,6 +198,82 @@ export function ChatDrawerContent({
           </GlassIconButton>
         </View>
       </View>
+
+      <Modal
+        visible={optionsVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setOptionsVisible(false)}
+      >
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => setOptionsVisible(false)}
+        >
+          <View style={styles.modalCard}>
+            <Pressable
+              style={styles.modalOption}
+              onPress={() => {
+                setOptionsVisible(false);
+                setRenameVisible(true);
+              }}
+            >
+              <Text style={styles.modalOptionText}>Renomear</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.modalOption, styles.modalOptionDanger]}
+              onPress={handleDeleteConfirm}
+            >
+              <Text
+                style={[styles.modalOptionText, styles.modalOptionDangerText]}
+              >
+                Excluir
+              </Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={renameVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRenameVisible(false)}
+      >
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => setRenameVisible(false)}
+        >
+          <View style={styles.renameCard}>
+            <Text style={styles.renameTitle}>Renomear conversa</Text>
+            <TextInput
+              style={styles.renameInput}
+              value={renameValue}
+              onChangeText={setRenameValue}
+              placeholder="Nome da conversa"
+              placeholderTextColor="#8E8E93"
+              autoFocus
+            />
+            <View style={styles.renameActions}>
+              <Pressable
+                style={styles.renameButton}
+                onPress={() => setRenameVisible(false)}
+              >
+                <Text style={styles.renameButtonText}>Cancelar</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.renameButton,
+                  !renameValue.trim() && styles.renameButtonDisabled,
+                ]}
+                onPress={handleRenameSubmit}
+                disabled={!renameValue.trim()}
+              >
+                <Text style={styles.renameButtonText}>Salvar</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
     </LinearGradient>
   );
 }
@@ -240,5 +372,74 @@ const styles = StyleSheet.create({
   emptyText: {
     color: "#999",
     fontSize: 14,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.3)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  modalCard: {
+    width: "100%",
+    borderRadius: 16,
+    backgroundColor: "#FFFFFF",
+    paddingVertical: 6,
+    borderCurve: "continuous",
+  },
+  modalOption: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  modalOptionDanger: {
+    borderTopWidth: 1,
+    borderTopColor: "#EFEFF0",
+  },
+  modalOptionText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#1C1C1E",
+  },
+  modalOptionDangerText: {
+    color: "#FF3B30",
+  },
+  renameCard: {
+    width: "100%",
+    borderRadius: 16,
+    backgroundColor: "#FFFFFF",
+    padding: 16,
+    gap: 12,
+    borderCurve: "continuous",
+  },
+  renameTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#1C1C1E",
+  },
+  renameInput: {
+    borderWidth: 1,
+    borderColor: "#ECEDEF",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: "#1C1C1E",
+  },
+  renameActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 10,
+  },
+  renameButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  renameButtonDisabled: {
+    opacity: 0.5,
+  },
+  renameButtonText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#1C1C1E",
   },
 });

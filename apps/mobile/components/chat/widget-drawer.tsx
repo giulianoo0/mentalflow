@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
+import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Canvas, Path, Skia } from "@shopify/react-native-skia";
 import { useMutation, useQuery } from "convex/react";
@@ -95,6 +96,7 @@ export function WidgetDrawer({
   onClose,
 }: WidgetDrawerProps) {
   console.log("[WidgetDrawer] Render with flowNanoId:", flowNanoId);
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const glassEnabled = isGlassAvailable;
   const iconTone = glassEnabled ? "#0B0B0C" : "#000";
@@ -163,7 +165,17 @@ export function WidgetDrawer({
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {events.length > 0 && <EventSummaryCard events={events} />}
+        {events.length > 0 && (
+          <EventSummaryCard
+            events={events}
+            onPress={() =>
+              router.push({
+                pathname: "/calendar-modal" as any,
+                params: flowNanoId ? { flowId: flowNanoId } : {},
+              })
+            }
+          />
+        )}
         <View style={styles.grid}>
           {renderItems.map((item) => {
             if (item.kind === "habitSummary") {
@@ -425,6 +437,10 @@ function WidgetCard({
     }
     return [];
   }, [isTask, relatedTitles, widget.description]);
+  const todoEntries = React.useMemo(
+    () => todoItems.map((label, index) => ({ label, index })),
+    [todoItems],
+  );
   const habitItems = React.useMemo(() => {
     if (!isHabit) return [];
     if (relatedTitles.length > 0) return relatedTitles;
@@ -512,6 +528,19 @@ function WidgetCard({
     totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
   const checklistAccent = isHealth ? "#4AA9FF" : typeColors[widget.type];
   const cardFlexBasis = flexBasis;
+  const orderedTodoEntries = React.useMemo(() => {
+    return [...todoEntries].sort((a, b) => {
+      const aChecked = checkedItems[a.index] ?? false;
+      const bChecked = checkedItems[b.index] ?? false;
+      if (aChecked !== bChecked) return aChecked ? 1 : -1;
+      const labelCompare = a.label.localeCompare(b.label, "pt-BR");
+      if (labelCompare !== 0) return labelCompare;
+      return a.index - b.index;
+    });
+  }, [checkedItems, todoEntries]);
+  const visibleTodoEntries = orderedTodoEntries.slice(0, 4);
+  const showTodoExpand = isTask && todoEntries.length > 4;
+  const showHabitExpand = isHabit && habitItems.length > 4;
 
   if (isWater) {
     return (
@@ -577,55 +606,60 @@ function WidgetCard({
 
       {isTask && hasTodoList && (
         <View style={styles.checklist}>
-          {todoItems.map((item, index) => {
-            const isChecked = checkedItems[index];
+          {visibleTodoEntries.map((item) => {
+            const isChecked = checkedItems[item.index];
             return (
-              <Pressable
-                key={`${widget.nanoId}-task-${index}`}
-                style={styles.checklistRow}
-                onPress={() => {
-                  const next = checkedItems.map((value, itemIndex) =>
-                    itemIndex === index ? !value : value,
-                  );
-                  setCheckedItems(next);
-                  void updateChecklist({
-                    nanoId: widget.nanoId,
-                    checked: next,
-                  });
-                }}
+              <Animated.View
+                key={item.label + item.index}
+                layout={Layout.springify()}
               >
-                <View
-                  style={[
-                    styles.checklistBox,
-                    { borderColor: checklistAccent },
-                    isChecked && {
-                      backgroundColor: checklistAccent,
-                      borderColor: checklistAccent,
-                    },
-                  ]}
+                <Pressable
+                  style={styles.checklistRow}
+                  onPress={() => {
+                    const next = checkedItems.map((value, itemIndex) =>
+                      itemIndex === item.index ? !value : value,
+                    );
+                    setCheckedItems(next);
+                    void updateChecklist({
+                      nanoId: widget.nanoId,
+                      checked: next,
+                    });
+                  }}
                 >
-                  {isChecked && (
-                    <Ionicons name="checkmark" size={12} color="#FFF" />
-                  )}
-                </View>
-                <Text
-                  style={[
-                    styles.checklistText,
-                    isChecked && styles.checklistTextChecked,
-                  ]}
-                >
-                  {item}
-                </Text>
-              </Pressable>
+                  <View
+                    style={[
+                      styles.checklistBox,
+                      { borderColor: checklistAccent },
+                      isChecked && {
+                        backgroundColor: checklistAccent,
+                        borderColor: checklistAccent,
+                      },
+                    ]}
+                  >
+                    {isChecked && (
+                      <Ionicons name="checkmark" size={12} color="#FFF" />
+                    )}
+                  </View>
+                  <Text
+                    style={[
+                      styles.checklistText,
+                      isChecked && styles.checklistTextChecked,
+                    ]}
+                  >
+                    {item.label}
+                  </Text>
+                </Pressable>
+              </Animated.View>
             );
           })}
+          {showTodoExpand && <Text style={styles.expandHint}>+ itens</Text>}
         </View>
       )}
 
       {isHabit && hasHabitList && (
         <View style={styles.habitChecklist}>
           <View style={styles.habitChecklistList}>
-            {habitItems.map((item, index) => {
+            {habitItems.slice(0, 4).map((item, index) => {
               const isChecked = checkedItems[index];
               return (
                 <Pressable
@@ -672,6 +706,7 @@ function WidgetCard({
               />
             </View>
           )}
+          {showHabitExpand && <Text style={styles.expandHint}>+ itens</Text>}
         </View>
       )}
 
@@ -1037,7 +1072,13 @@ function SparkleDot({
   );
 }
 
-function EventSummaryCard({ events }: { events: Widget[] }) {
+function EventSummaryCard({
+  events,
+  onPress,
+}: {
+  events: Widget[];
+  onPress?: () => void;
+}) {
   const now = new Date();
   const todayKey = now.toDateString();
   const dayName = now
@@ -1065,7 +1106,13 @@ function EventSummaryCard({ events }: { events: Widget[] }) {
   );
 
   return (
-    <View style={styles.eventSummaryCard}>
+    <Pressable
+      style={({ pressed }) => [
+        styles.eventSummaryCard,
+        pressed && styles.eventSummaryCardPressed,
+      ]}
+      onPress={onPress}
+    >
       <View style={styles.eventSummaryLeft}>
         <Text style={styles.eventSummaryDay}>{dayName}</Text>
         <Text style={styles.eventSummaryDate}>{dayNumber}</Text>
@@ -1102,7 +1149,7 @@ function EventSummaryCard({ events }: { events: Widget[] }) {
           ))}
         </View>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -1204,11 +1251,14 @@ function HabitSummaryCard({
   habits,
   flexBasis,
   isExpanded,
+  flowNanoId,
 }: {
   habits: Widget[];
   flexBasis: number;
   isExpanded: boolean;
+  flowNanoId?: string;
 }) {
+  const router = useRouter();
   const updateHabitLog = useMutation(api.widgets.updateHabitLog);
   const [todayKey, setTodayKey] = React.useState(() =>
     formatDateKey(new Date()),
@@ -1302,6 +1352,16 @@ function HabitSummaryCard({
   const progressPercent =
     totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
 
+  const visibleItems = orderedItems.slice(0, 5);
+  const showExpandAction = orderedItems.length > 5;
+  const handleOpenHabitsModal = React.useCallback(() => {
+    if (!flowNanoId) return;
+    router.push({
+      pathname: "/habits-modal" as any,
+      params: { flowId: flowNanoId },
+    });
+  }, [flowNanoId, router]);
+
   return (
     <Animated.View
       layout={Layout.springify()}
@@ -1318,7 +1378,7 @@ function HabitSummaryCard({
 
       <View style={styles.habitChecklist}>
         <View style={styles.habitChecklistList}>
-          {orderedItems.map((item) => {
+          {visibleItems.map((item) => {
             const isChecked =
               checkedByHabit[item.habit.nanoId]?.[item.index] ?? false;
             return (
@@ -1373,6 +1433,7 @@ function HabitSummaryCard({
             />
           </View>
         )}
+        {showExpandAction && <Text style={styles.expandHint}>+ itens</Text>}
       </View>
     </Animated.View>
   );
@@ -1764,6 +1825,10 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 4,
   },
+  eventSummaryCardPressed: {
+    transform: [{ scale: 0.98 }],
+    opacity: 0.92,
+  },
   eventSummaryLeft: {
     flex: 1,
     gap: 6,
@@ -1909,6 +1974,12 @@ const styles = StyleSheet.create({
   habitProgress: {
     alignItems: "center",
     justifyContent: "center",
+  },
+  expandHint: {
+    marginTop: 8,
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#8C8C8C",
   },
   todoEmpty: {
     marginTop: 12,

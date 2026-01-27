@@ -73,6 +73,14 @@ function RootLayoutNav() {
           name="settings-modal"
           options={{ presentation: "modal", headerShown: false }}
         />
+        <Stack.Screen
+          name="calendar-modal"
+          options={{
+            presentation: "modal",
+            headerShown: false,
+            gestureEnabled: false,
+          }}
+        />
 
         <Stack.Screen
           name="modal"

@@ -132,6 +132,12 @@ const schema = defineSchema({
     audioEventId: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_flow", ["flowId", "createdAt"]),
+
+  userSettings: defineTable({
+    userId: v.id("users"),
+    voiceId: v.optional(v.string()),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
 });
 
 export default schema;

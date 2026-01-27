@@ -337,7 +337,7 @@ export default function ChatLayout() {
         const newFlow = await createFlow({});
         activeFlowId = newFlow.flowNanoId;
         setActiveFlowNanoId(activeFlowId);
-        router.setParams({ flowId: activeFlowId });
+        router.setParams({ flowId: activeFlowId as string });
       }
 
       const requestId = nanoid();

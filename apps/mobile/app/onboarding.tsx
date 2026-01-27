@@ -53,8 +53,9 @@ export default function Onboarding() {
           if (code) {
             // Complete the sign-in by calling signIn with the code
             console.log("🔵 Completing sign-in with code...");
-            await signIn("google", { code });
+            await signIn("google", { code, redirectTo });
             console.log("🔵 Sign-in completed!");
+            router.replace("/(chat)" as const);
           }
         }
       }

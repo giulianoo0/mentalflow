@@ -82,6 +82,7 @@ export function ChatInputBar({
   const morphingLabelStyle = glassEnabled
     ? styles.faleTextGlass
     : styles.faleText;
+  const isChatMode = displayMode === "chat";
   const canSend = allowSend && value.trim().length > 0;
   const canStartVoice =
     !isVoiceActive &&
@@ -89,6 +90,7 @@ export function ChatInputBar({
       voiceStatus === "disconnected" ||
       voiceStatus === "error");
   const isWidgetMode = displayMode === "widgets";
+  const [glassKey, setGlassKey] = React.useState(0);
   const handleVoicePress = React.useCallback(() => {
     if (!canStartVoice) return;
     onVoicePress?.();
@@ -98,10 +100,18 @@ export function ChatInputBar({
   const isExpanded = useSharedValue(0);
   const [isKeyboardVisible, setIsKeyboardVisible] = React.useState(false);
   const [contentHeight, setContentHeight] = React.useState(100);
+  const showCollapsedSend =
+    isChatMode && !isKeyboardVisible && !isVoiceActive && canSend;
+  const collapsedMode = showCollapsedSend ? "send" : primaryAction;
 
   // Internal button size
   const INTERNAL_BUTTON_SIZE = 42;
-  const collapsedButtonWidth = primaryAction === "plus" ? 48 : 90;
+  const collapsedButtonWidth =
+    collapsedMode === "plus"
+      ? 48
+      : collapsedMode === "send"
+        ? LAYOUT.BUTTON_SIZE
+        : 90;
   const internalButtonWidth = useSharedValue(
     canSend ? INTERNAL_BUTTON_SIZE : collapsedButtonWidth,
   );
@@ -110,12 +120,22 @@ export function ChatInputBar({
   );
 
   // Morphing button animation values
-  const COLLAPSED_WIDTH = primaryAction === "plus" ? 48 : 90;
-  const COLLAPSED_HEIGHT = primaryAction === "plus" ? 48 : LAYOUT.INPUT_HEIGHT;
+  const COLLAPSED_WIDTH =
+    collapsedMode === "plus"
+      ? 48
+      : collapsedMode === "send"
+        ? LAYOUT.BUTTON_SIZE
+        : 90;
+  const COLLAPSED_HEIGHT =
+    collapsedMode === "plus" || collapsedMode === "send"
+      ? 48
+      : LAYOUT.INPUT_HEIGHT;
   const LEFT_SPACING = 16; // Spacing from left screen edge when expanded
   const FULL_WIDTH = screenWidth - 12 - LEFT_SPACING; // From right inset to left margin
   const morphingWidth = useSharedValue(COLLAPSED_WIDTH);
   const widgetModeProgress = useSharedValue(isWidgetMode ? 1 : 0);
+  const internalActionVisibility = useSharedValue(1);
+  const outerActionVisibility = useSharedValue(1);
 
   useEffect(() => {
     const showSub = Keyboard.addListener("keyboardWillShow", () => {
@@ -160,11 +180,13 @@ export function ChatInputBar({
 
   // Animate morphing button width when voice active changes
   useEffect(() => {
-    morphingWidth.value = withTiming(
-      isVoiceActive && primaryAction === "voice" ? FULL_WIDTH : COLLAPSED_WIDTH,
-      { duration: ANIMATION_DURATION, easing: customEasing },
-    );
-  }, [isVoiceActive, FULL_WIDTH, primaryAction]);
+    const targetWidth =
+      isVoiceActive && primaryAction === "voice" ? FULL_WIDTH : COLLAPSED_WIDTH;
+    morphingWidth.value = withTiming(targetWidth, {
+      duration: ANIMATION_DURATION,
+      easing: customEasing,
+    });
+  }, [isVoiceActive, FULL_WIDTH, COLLAPSED_WIDTH, primaryAction]);
 
   useEffect(() => {
     widgetModeProgress.value = withTiming(isWidgetMode ? 1 : 0, {
@@ -172,6 +194,29 @@ export function ChatInputBar({
       easing: customEasing,
     });
   }, [isWidgetMode]);
+
+  useEffect(() => {
+    setGlassKey((prev) => prev + 1);
+  }, [displayMode, isVoiceActive]);
+
+  useEffect(() => {
+    internalActionVisibility.value = withTiming(1, {
+      duration: 180,
+      easing: customEasing,
+    });
+  }, []);
+
+  useEffect(() => {
+    const shouldHideOuterAction =
+      !isWidgetMode &&
+      isChatMode &&
+      isKeyboardVisible &&
+      value.trim().length > 0;
+    outerActionVisibility.value = withTiming(shouldHideOuterAction ? 0 : 1, {
+      duration: 180,
+      easing: customEasing,
+    });
+  }, [isChatMode, isKeyboardVisible, value, isWidgetMode]);
 
   const expandedInputWidth = screenWidth - 24 + 4;
   const bottomInset = Math.max(insets.bottom, 12);
@@ -227,8 +272,13 @@ export function ChatInputBar({
   });
 
   const plusButtonAnimatedStyle = useAnimatedStyle(() => {
+    const collapsedTop = (LAYOUT.INPUT_HEIGHT - LAYOUT.BUTTON_SIZE) / 2;
     const bottomPosition = contentHeight - 56;
-    const top = interpolate(isExpanded.value, [0, 1], [0, bottomPosition]);
+    const top = interpolate(
+      isExpanded.value,
+      [0, 1],
+      [collapsedTop, bottomPosition],
+    );
     const left = interpolate(isExpanded.value, [0, 1], [0, 12]);
 
     return {
@@ -240,21 +290,24 @@ export function ChatInputBar({
   });
 
   const internalFaleButtonAnimatedStyle = useAnimatedStyle(() => {
+    const visibility = internalActionVisibility.value;
+    const baseOpacity = interpolate(
+      isExpanded.value,
+      [0.8, 1],
+      [0, 1],
+      Extrapolation.CLAMP,
+    );
+    const baseScale = interpolate(
+      isExpanded.value,
+      [0.8, 1],
+      [0.8, 1],
+      Extrapolation.CLAMP,
+    );
     return {
-      opacity: interpolate(
-        isExpanded.value,
-        [0.8, 1],
-        [0, 1],
-        Extrapolation.CLAMP,
-      ),
+      opacity: baseOpacity * visibility,
       transform: [
         {
-          scale: interpolate(
-            isExpanded.value,
-            [0.8, 1],
-            [0.8, 1],
-            Extrapolation.CLAMP,
-          ),
+          scale: baseScale * (0.9 + 0.1 * visibility),
         },
       ],
       width: internalButtonWidth.value,
@@ -262,7 +315,8 @@ export function ChatInputBar({
   });
 
   useEffect(() => {
-    const baseWidth = primaryAction === "plus" ? 48 : 90;
+    const baseWidth =
+      isKeyboardVisible && canSend ? LAYOUT.BUTTON_SIZE : collapsedButtonWidth;
     internalButtonWidth.value = withTiming(
       canSend ? INTERNAL_BUTTON_SIZE : baseWidth,
       { duration: ANIMATION_DURATION, easing: customEasing },
@@ -271,7 +325,7 @@ export function ChatInputBar({
       canSend ? LAYOUT.BUTTON_SIZE : baseWidth,
       { duration: ANIMATION_DURATION, easing: customEasing },
     );
-  }, [canSend, primaryAction]);
+  }, [canSend, collapsedButtonWidth, isKeyboardVisible]);
 
   const handleContentSizeChange = (event: any) => {
     const newHeight = event.nativeEvent.contentSize.height;
@@ -305,6 +359,7 @@ export function ChatInputBar({
       bottom: 0,
       height: COLLAPSED_HEIGHT,
       borderRadius: COLLAPSED_HEIGHT / 2,
+      opacity: outerActionVisibility.value,
       transform: [{ translateX: centeredShift * widgetModeProgress.value }],
     };
   });
@@ -371,85 +426,100 @@ export function ChatInputBar({
       >
         {/* Main Content Row */}
         <View style={styles.contentRow}>
-          {/* Input Wrapper - Fades out when voice active */}
-          <Animated.View
-            style={[
-              styles.expandingInputWrapper,
-              glassEnabled
-                ? styles.expandingInputGlass
-                : styles.expandingInputFallback,
-              wrapperAnimatedStyle,
-              inputFadeStyle,
-              widgetInputFadeStyle,
-            ]}
-            pointerEvents={isVoiceActive || isWidgetMode ? "none" : "auto"}
-          >
-            <GlassSurface
-              style={StyleSheet.absoluteFill}
-              highlightOpacity={0.6}
-            />
-            {/* Invisible pressable overlay when collapsed */}
-            {!isKeyboardVisible && !isVoiceActive && (
+          {isChatMode &&
+            !isKeyboardVisible &&
+            !isVoiceActive &&
+            !isWidgetMode && (
               <Pressable
-                style={[StyleSheet.absoluteFill, { right: 100 }]}
+                style={styles.focusOverlay}
                 onPress={() => inputRef.current?.focus()}
               />
             )}
-
-            {/* Plus Button */}
-            <AnimatedPressable
-              style={[styles.plusButton, plusButtonAnimatedStyle]}
-            >
-              <Ionicons
-                name="add"
-                size={30}
-                color={primaryAction === "plus" ? "#FFF" : "#999"}
-              />
-            </AnimatedPressable>
-
-            {/* Text Input */}
-            <AnimatedTextInput
-              ref={inputRef}
-              style={[styles.textInput, inputAnimatedStyle]}
-              value={value}
-              onChangeText={onChangeText}
-              onContentSizeChange={handleContentSizeChange}
-              placeholder={
-                isKeyboardVisible ? "Pergunte alguma coisa" : placeholder
-              }
-              placeholderTextColor="#8E8E93"
-              multiline
-              textAlignVertical={isKeyboardVisible ? "top" : "center"}
-            />
-
-            {/* Internal Fale/Send Button */}
-            <AnimatedPressable
+          {/* Input Wrapper - Hidden in widget mode */}
+          {!isWidgetMode && (
+            <Animated.View
               style={[
-                styles.internalFaleButton,
-                internalFaleButtonAnimatedStyle,
+                styles.expandingInputWrapper,
+                glassEnabled
+                  ? styles.expandingInputGlass
+                  : styles.expandingInputFallback,
+                wrapperAnimatedStyle,
+                inputFadeStyle,
+                widgetInputFadeStyle,
               ]}
-              onPress={canSend ? handleSend : handleVoicePress}
-              disabled={!canSend && !canStartVoice}
+              pointerEvents={isVoiceActive ? "none" : "auto"}
             >
-              <LinearGradient
-                colors={["black", "black"]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.internalFaleContent}
+              <GlassSurface
+                key={`input-glass-${glassKey}`}
+                style={StyleSheet.absoluteFill}
+                highlightOpacity={0.6}
+              />
+              {/* Invisible pressable overlay when collapsed */}
+              {!isKeyboardVisible && !isVoiceActive && (
+                <Pressable
+                  style={[
+                    StyleSheet.absoluteFill,
+                    { right: isChatMode ? 0 : 100 },
+                  ]}
+                  onPress={() => inputRef.current?.focus()}
+                />
+              )}
+
+              {/* Plus Button */}
+              <AnimatedPressable
+                style={[styles.plusButton, plusButtonAnimatedStyle]}
               >
-                {canSend ? (
-                  <Ionicons name="arrow-up" size={24} color="#FFF" />
-                ) : primaryAction === "plus" ? (
-                  <Ionicons name="add" size={22} color="#FFF" />
-                ) : (
-                  <>
-                    <Ionicons name="mic-outline" size={18} color="#FFF" />
-                    <Text style={styles.internalFaleText}>Fale</Text>
-                  </>
-                )}
-              </LinearGradient>
-            </AnimatedPressable>
-          </Animated.View>
+                <Ionicons
+                  name="add"
+                  size={30}
+                  color={primaryAction === "plus" ? "#FFF" : "#999"}
+                />
+              </AnimatedPressable>
+
+              {/* Text Input */}
+              <AnimatedTextInput
+                ref={inputRef}
+                style={[styles.textInput, inputAnimatedStyle]}
+                value={value}
+                onChangeText={onChangeText}
+                onContentSizeChange={handleContentSizeChange}
+                placeholder={
+                  isKeyboardVisible ? "Pergunte alguma coisa" : placeholder
+                }
+                placeholderTextColor="#8E8E93"
+                multiline
+                textAlignVertical={isKeyboardVisible ? "top" : "center"}
+              />
+
+              {/* Internal Fale/Send Button */}
+              <AnimatedPressable
+                style={[
+                  styles.internalFaleButton,
+                  internalFaleButtonAnimatedStyle,
+                ]}
+                onPress={canSend ? handleSend : handleVoicePress}
+                disabled={!canSend && !canStartVoice}
+              >
+                <LinearGradient
+                  colors={["black", "black"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.internalFaleContent}
+                >
+                  {canSend ? (
+                    <Ionicons name="arrow-up" size={24} color="#FFF" />
+                  ) : primaryAction === "plus" ? (
+                    <Ionicons name="add" size={22} color="#FFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="mic-outline" size={18} color="#FFF" />
+                      <Text style={styles.internalFaleText}>Fale</Text>
+                    </>
+                  )}
+                </LinearGradient>
+              </AnimatedPressable>
+            </Animated.View>
+          )}
 
           {/* Morphing Fale Button - Expands into Voice Player */}
           <Animated.View
@@ -460,21 +530,30 @@ export function ChatInputBar({
                 : styles.morphingButtonFallback,
               morphingButtonStyle,
             ]}
+            pointerEvents="box-none"
           >
             <GlassSurface
+              key={`morph-glass-${glassKey}`}
               style={StyleSheet.absoluteFill}
               highlightOpacity={0.65}
             />
             {/* Fale Button Content - Fades out */}
             <Animated.View
               style={[styles.faleContentWrapper, faleContentStyle]}
+              pointerEvents={isKeyboardVisible ? "none" : "auto"}
             >
               <Pressable
                 style={styles.faleButtonInner}
-                onPress={handleVoicePress}
-                disabled={!canStartVoice}
+                onPress={showCollapsedSend ? handleSend : handleVoicePress}
+                disabled={showCollapsedSend ? !canSend : !canStartVoice}
               >
-                {primaryAction === "plus" ? (
+                {showCollapsedSend ? (
+                  <Ionicons
+                    name="arrow-up"
+                    size={22}
+                    color={morphingIconColor}
+                  />
+                ) : primaryAction === "plus" ? (
                   <Ionicons name="add" size={22} color={morphingIconColor} />
                 ) : (
                   <>
@@ -528,11 +607,16 @@ const styles = StyleSheet.create({
     paddingTop: 8,
   },
   contentRow: {
+    position: "relative",
     flexDirection: "row",
     alignItems: "flex-end",
     justifyContent: "flex-end",
     minHeight: LAYOUT.INPUT_HEIGHT,
     gap: 10,
+  },
+  focusOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 5,
   },
   expandingInputWrapper: {
     position: "absolute",
@@ -604,6 +688,7 @@ const styles = StyleSheet.create({
     borderRadius: LAYOUT.INPUT_HEIGHT / 2,
     overflow: "hidden",
     borderCurve: "continuous",
+    zIndex: 10,
   },
   morphingButtonFallback: {
     backgroundColor: "#2A2A2A",
@@ -631,8 +716,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    width: "100%",
+    alignSelf: "center",
     height: "100%",
+    paddingHorizontal: 16,
   },
   voiceContentWrapper: {
     ...StyleSheet.absoluteFillObject,
